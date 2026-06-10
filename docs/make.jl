@@ -1,6 +1,8 @@
 using ComparativeJudgement
 using Documenter
 
+ENV["GKSwstype"] = "100"   # headless GR for the Plots-based tutorial figures
+
 DocMeta.setdocmeta!(ComparativeJudgement, :DocTestSetup, :(using ComparativeJudgement); recursive=true)
 
 makedocs(;

@@ -32,6 +32,7 @@ compared only once or twice and some never meet at all:
 ```@example bt
 using ComparativeJudgement
 using Random
+using Plots
 
 rng = MersenneTwister(42)
 
@@ -77,8 +78,15 @@ zero — directly comparable to `λ_true`:
 
 ```@example bt
 λ̂ = strengths(fitted_mle)
-[labels round.(λ_true, digits=2) round.(λ̂, digits=2)]
+scatter(λ_true, λ̂;
+        xlabel="true strength λ", ylabel="MLE estimate λ̂",
+        label="items", legend=:topleft)
+plot!(identity, -2.6:0.1:2.6; linestyle=:dash, color=:black, label="perfect recovery")
 ```
+
+The estimates scatter around the diagonal with no systematic distortion —
+the spread is sampling noise from ~40 comparisons per item (the fit agrees
+with R's `BradleyTerry2` to solver precision on this data).
 
 Ranking the items is a `sortperm` away. With only 600 comparisons the
 recovered order is close to the truth (`S30`, `S29`, …, `S01`) but adjacent
@@ -111,12 +119,23 @@ nothing # hide
 ```
 
 Posterior summaries come from [`posterior_mean`](@ref),
-[`posterior_std`](@ref), and [`credible_interval`](@ref). The posterior
-standard deviations make the sparsity visible: roughly 40 comparisons per
-item leave each strength known only to within a few tenths:
+[`posterior_std`](@ref), and [`credible_interval`](@ref). Plotting the
+posterior means with their 95% credible intervals against the truth makes
+the sparsity visible: roughly 40 comparisons per item leave each strength
+known only to within a few tenths, and nearly all intervals straddle the
+true values:
 
 ```@example bt
-[labels round.(posterior_mean(fitted_bayes), digits=2) round.(posterior_std(fitted_bayes), digits=2)]
+post = posterior_mean(fitted_bayes)
+ci = [credible_interval(fitted_bayes, k; prob=0.95) for k in 1:n]
+lo, hi = first.(ci), last.(ci)
+
+scatter(1:n, post;
+        yerror=(post .- lo, hi .- post),
+        xlabel="item", ylabel="latent strength λ",
+        xticks=(1:5:n, labels[1:5:n]),
+        label="posterior mean, 95% CI", legend=:topleft)
+scatter!(1:n, λ_true; marker=:x, color=:red, label="truth")
 ```
 
 ```@example bt
@@ -205,12 +224,35 @@ each item's comparison record — none of these items was measured. The errors
 are not uniform: mid-scale items are predicted closely, while the held-out
 items at the ends of the scale (`S02`, `S30`) are pulled toward the centre,
 the prediction-scale footprint of the slope attenuation above. More
-comparisons per item would tighten both. For a single item, `predict`
-returns posterior-predictive draws, or a credible interval when `prob` is
-given:
+comparisons per item would tighten both.
+
+The whole joint model fits on one picture: the calibration line maps latent
+strengths to the measurement scale, the anchors pin it down, and the
+held-out items ride along it with predictive intervals that comfortably
+cover their true values:
 
 ```@example bt
-predict(fitted_anchored, "S30"; prob=0.9)        # item S30 was never measured
+cal = calibration(fitted_anchored)
+λ_post = posterior_mean(fitted_anchored)
+pred_ints = [predict(fitted_anchored, k; prob=0.9, rng=rng) for k in held_out]
+plo, phi = first.(pred_ints), last.(pred_ints)
+
+scatter(λ_post[anchored_set], y_obs;
+        xlabel="posterior mean strength λ", ylabel="measurement scale y",
+        label="anchors (measured y)", legend=:topleft)
+scatter!(λ_post[held_out], preds[held_out];
+         yerror=(preds[held_out] .- plo, phi .- preds[held_out]),
+         label="held-out predictions, 90% PI")
+scatter!(λ_post[held_out], y_true[held_out]; marker=:x, color=:red,
+         label="held-out truth")
+plot!(x -> cal.a + cal.b * x, -2.3, 2.3; color=:black, label="fitted line a + b·λ")
+```
+
+For a single item, `predict` returns posterior-predictive draws, or a
+credible interval when `prob` is given:
+
+```@example bt
+predict(fitted_anchored, "S30"; prob=0.9, rng=rng)   # item S30 was never measured
 ```
 
 The intervals are honest about the comparison sparsity — wide enough to
@@ -219,7 +261,7 @@ values fall inside their 90% predictive interval:
 
 ```@example bt
 covered = count(held_out) do k
-    lo, hi = predict(fitted_anchored, k; prob=0.9)
+    lo, hi = predict(fitted_anchored, k; prob=0.9, rng=rng)
     lo <= y_true[k] <= hi
 end
 (covered, length(held_out))
