@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Bradley–Terry models · ComparativeJudgement.jl</title><meta name="title" content="Bradley–Terry models · ComparativeJudgement.jl"/><meta property="og:title" content="Bradley–Terry models · ComparativeJudgement.jl"/><meta property="twitter:title" content="Bradley–Terry models · ComparativeJudgement.jl"/><meta name="description" content="Documentation for ComparativeJudgement.jl."/><meta property="og:description" content="Documentation for ComparativeJudgement.jl."/><meta property="twitter:description" content="Documentation for ComparativeJudgement.jl."/><meta property="og:url" content="https://jmarsh96.github.io/ComparativeJudgement.jl/bradley_terry/"/><meta property="twitter:url" content="https://jmarsh96.github.io/ComparativeJudgement.jl/bradley_terry/"/><link rel="canonical" href="https://jmarsh96.github.io/ComparativeJudgement.jl/bradley_terry/"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">ComparativeJudgement.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li class="is-active"><a class="tocitem" href>Bradley–Terry models</a><ul class="internal"><li><a class="tocitem" href="#Simulating-comparison-data"><span>Simulating comparison data</span></a></li><li><a class="tocitem" href="#Maximum-likelihood"><span>Maximum likelihood</span></a></li><li><a class="tocitem" href="#Bayesian-inference"><span>Bayesian inference</span></a></li><li><a class="tocitem" href="#Anchored-Bradley–Terry"><span>Anchored Bradley–Terry</span></a></li></ul></li><li><a class="tocitem" href="../api/">API reference</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Bradley–Terry models</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Bradley–Terry models</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/jmarsh96/ComparativeJudgement.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/jmarsh96/ComparativeJudgement.jl/blob/main/docs/src/bradley_terry.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Bradley–Terry-models"><a class="docs-heading-anchor" href="#Bradley–Terry-models">Bradley–Terry models</a><a id="Bradley–Terry-models-1"></a><a class="docs-heading-anchor-permalink" href="#Bradley–Terry-models" title="Permalink"></a></h1><p>The Bradley–Terry model describes pairwise comparisons between items. Each item <span>$i$</span> has a latent strength <span>$\lambda_i$</span>, and the probability that it wins a comparison against item <span>$j$</span> is</p><p class="math-container">\[P(i \text{ beats } j) = \frac{1}{1 + e^{-(\lambda_i - \lambda_j)}}.\]</p><p>ComparativeJudgement provides three ways to fit it:</p><ul><li><strong>Maximum likelihood</strong> (<a href="../api/#ComparativeJudgement.MLE"><code>MLE</code></a>) — fast point estimates of the strengths, good for ranking items.</li><li><strong>Bayesian</strong> (<a href="../api/#ComparativeJudgement.Bayesian"><code>Bayesian</code></a>) — a Pólya-Gamma augmented Gibbs sampler giving full posterior distributions, so you also get uncertainty for every strength and win probability.</li><li><strong>Anchored</strong> (<a href="../api/#ComparativeJudgement.BradleyTerryAnchored"><code>BradleyTerryAnchored</code></a>) — a joint Bayesian model in which known measurements <span>$y = a + b\lambda + \varepsilon$</span> for a subset of items calibrate the latent scale, so the fit can <em>predict measurements</em> for the unanchored items.</li></ul><p>This page walks through all three on one simulated dataset.</p><h2 id="Simulating-comparison-data"><a class="docs-heading-anchor" href="#Simulating-comparison-data">Simulating comparison data</a><a id="Simulating-comparison-data-1"></a><a class="docs-heading-anchor-permalink" href="#Simulating-comparison-data" title="Permalink"></a></h2><p>We simulate 30 items with known, evenly spaced strengths and 600 comparisons in total, each between a randomly chosen pair of items. This is the typical comparative judgement regime: with 435 possible pairs, most pairs are compared only once or twice and some never meet at all:</p><pre><code class="language-julia hljs">using ComparativeJudgement
+using Random
+
+rng = MersenneTwister(42)
+
+labels = [&quot;S&quot; * lpad(i, 2, &#39;0&#39;) for i in 1:30]   # S01 … S30
+n = length(labels)
+λ_true = collect(range(-1.5, 1.5, length=n))     # S01 weakest … S30 strongest
+
+logistic(x) = 1 / (1 + exp(-x))
+
+n_comparisons = 600
+wins = zeros(Int, n, n)
+for _ in 1:n_comparisons
+    i = rand(rng, 1:n)
+    j = rand(rng, 1:n-1)
+    j = j &gt;= i ? j + 1 : j                       # distinct random pair
+    if rand(rng) &lt; logistic(λ_true[i] - λ_true[j])
+        wins[i, j] += 1
+    else
+        wins[j, i] += 1
+    end
+end
+
+data = PairwiseData(wins, labels)</code></pre><p><code>wins[i, j]</code> counts how often item <code>i</code> beat item <code>j</code>; <a href="../api/#ComparativeJudgement.PairwiseData"><code>PairwiseData</code></a> pairs the matrix with the item labels, which can be any type (strings, symbols, integers, …).</p><h2 id="Maximum-likelihood"><a class="docs-heading-anchor" href="#Maximum-likelihood">Maximum likelihood</a><a id="Maximum-likelihood-1"></a><a class="docs-heading-anchor-permalink" href="#Maximum-likelihood" title="Permalink"></a></h2><p><a href="../api/#ComparativeJudgement.fit"><code>fit</code></a> takes the model, the inference method, and the data:</p><pre><code class="language-julia hljs">fitted_mle = fit(BradleyTerry(), MLE(), data)
+fitted_mle.converged</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">true</code></pre><p>(<code>fit(BradleyTerry(), data)</code> is a shorthand for the same thing.) <a href="../api/#ComparativeJudgement.strengths"><code>strengths</code></a> returns the estimated <span>$\hat\lambda$</span>, centred to sum to zero — directly comparable to <code>λ_true</code>:</p><pre><code class="language-julia hljs">λ̂ = strengths(fitted_mle)
+[labels round.(λ_true, digits=2) round.(λ̂, digits=2)]</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">30×3 Matrix{Any}:
+ &quot;S01&quot;  -1.5   -2.35
+ &quot;S02&quot;  -1.4   -1.01
+ &quot;S03&quot;  -1.29  -1.35
+ &quot;S04&quot;  -1.19  -1.03
+ &quot;S05&quot;  -1.09  -0.67
+ &quot;S06&quot;  -0.98  -1.09
+ &quot;S07&quot;  -0.88  -0.8
+ &quot;S08&quot;  -0.78  -0.63
+ &quot;S09&quot;  -0.67  -0.48
+ &quot;S10&quot;  -0.57  -0.63
+ ⋮             
+ &quot;S22&quot;   0.67   0.47
+ &quot;S23&quot;   0.78   0.55
+ &quot;S24&quot;   0.88   0.88
+ &quot;S25&quot;   0.98   1.13
+ &quot;S26&quot;   1.09   1.39
+ &quot;S27&quot;   1.19   1.49
+ &quot;S28&quot;   1.29   1.33
+ &quot;S29&quot;   1.4    1.29
+ &quot;S30&quot;   1.5    1.23</code></pre><p>Ranking the items is a <code>sortperm</code> away. With only 600 comparisons the recovered order is close to the truth (<code>S30</code>, <code>S29</code>, …, <code>S01</code>) but adjacent items — separated by just 0.10 on the latent scale — do swap:</p><pre><code class="language-julia hljs">labels[sortperm(λ̂, rev=true)]</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">30-element Vector{String}:
+ &quot;S27&quot;
+ &quot;S26&quot;
+ &quot;S28&quot;
+ &quot;S29&quot;
+ &quot;S30&quot;
+ &quot;S25&quot;
+ &quot;S24&quot;
+ &quot;S21&quot;
+ &quot;S23&quot;
+ &quot;S22&quot;
+ ⋮
+ &quot;S08&quot;
+ &quot;S10&quot;
+ &quot;S05&quot;
+ &quot;S07&quot;
+ &quot;S02&quot;
+ &quot;S04&quot;
+ &quot;S06&quot;
+ &quot;S03&quot;
+ &quot;S01&quot;</code></pre><p><a href="../api/#ComparativeJudgement.probability"><code>probability</code></a> gives fitted win probabilities, by label or by index, and <a href="../api/#ComparativeJudgement.loglikelihood"><code>loglikelihood</code></a> the log-likelihood at the estimate:</p><pre><code class="language-julia hljs">(probability(fitted_mle, &quot;S30&quot;, &quot;S01&quot;), loglikelihood(fitted_mle))</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">(0.9726529881456617, -327.4487653376153)</code></pre><h2 id="Bayesian-inference"><a class="docs-heading-anchor" href="#Bayesian-inference">Bayesian inference</a><a id="Bayesian-inference-1"></a><a class="docs-heading-anchor-permalink" href="#Bayesian-inference" title="Permalink"></a></h2><p>The Bayesian fit runs a Gibbs sampler (Pólya-Gamma augmentation makes every update conjugate) and returns posterior draws instead of a point estimate. <a href="../api/#ComparativeJudgement.Bayesian"><code>Bayesian</code></a> controls the run: <code>n_samples</code>, <code>n_burnin</code>, <code>thin</code>, and <code>center</code> (each sweep re-centres <span>$\lambda$</span> to sum to zero, fixing the location that the likelihood leaves free). The prior on <span>$\lambda$</span> is a <a href="../api/#ComparativeJudgement.NormalPrior"><code>NormalPrior</code></a>, by default <span>$N(0, 10 I)$</span>:</p><pre><code class="language-julia hljs">method = Bayesian(n_samples=2000, n_burnin=500)
+fitted_bayes = fit(BradleyTerry(), method, data, NormalPrior(n); rng=rng)</code></pre><p>Posterior summaries come from <a href="../api/#ComparativeJudgement.posterior_mean"><code>posterior_mean</code></a>, <a href="../api/#ComparativeJudgement.posterior_std"><code>posterior_std</code></a>, and <a href="../api/#ComparativeJudgement.credible_interval"><code>credible_interval</code></a>. The posterior standard deviations make the sparsity visible: roughly 40 comparisons per item leave each strength known only to within a few tenths:</p><pre><code class="language-julia hljs">[labels round.(posterior_mean(fitted_bayes), digits=2) round.(posterior_std(fitted_bayes), digits=2)]</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">30×3 Matrix{Any}:
+ &quot;S01&quot;  -2.4   0.53
+ &quot;S02&quot;  -1.05  0.39
+ &quot;S03&quot;  -1.4   0.38
+ &quot;S04&quot;  -1.07  0.4
+ &quot;S05&quot;  -0.69  0.3
+ &quot;S06&quot;  -1.12  0.36
+ &quot;S07&quot;  -0.82  0.33
+ &quot;S08&quot;  -0.65  0.41
+ &quot;S09&quot;  -0.49  0.33
+ &quot;S10&quot;  -0.67  0.41
+ ⋮             
+ &quot;S22&quot;   0.48  0.33
+ &quot;S23&quot;   0.56  0.37
+ &quot;S24&quot;   0.92  0.38
+ &quot;S25&quot;   1.2   0.4
+ &quot;S26&quot;   1.44  0.41
+ &quot;S27&quot;   1.55  0.36
+ &quot;S28&quot;   1.4   0.4
+ &quot;S29&quot;   1.34  0.45
+ &quot;S30&quot;   1.27  0.36</code></pre><pre><code class="language-julia hljs">credible_interval(fitted_bayes, 1; prob=0.95)   # 95% CI for item S01&#39;s strength</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">(-3.5401185296884496, -1.436053596554529)</code></pre><p>For Bayesian fits, <a href="../api/#ComparativeJudgement.probability"><code>probability</code></a> returns the posterior mean win probability, which accounts for the uncertainty in the strengths:</p><pre><code class="language-julia hljs">(probability(fitted_bayes, &quot;S30&quot;, &quot;S01&quot;), probability(fitted_bayes, &quot;S16&quot;, &quot;S15&quot;))</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">(0.9698713253222297, 0.47343529038058846)</code></pre><h2 id="Anchored-Bradley–Terry"><a class="docs-heading-anchor" href="#Anchored-Bradley–Terry">Anchored Bradley–Terry</a><a id="Anchored-Bradley–Terry-1"></a><a class="docs-heading-anchor-permalink" href="#Anchored-Bradley–Terry" title="Permalink"></a></h2><p>Comparative judgement places items on a relative scale: the <span>$\lambda$</span> above say item S30 is stronger than item S01, but not what either <em>measures</em>. If some items have known measurements — exam marks for a few benchmark scripts, lab measurements for a few samples — the anchored model ties the scales together. For the anchored subset <span>$S$</span> it assumes</p><p class="math-container">\[y_i = a + b\,\lambda_i + \varepsilon_i, \qquad \varepsilon_i \sim N(0, \sigma^2),
+\quad i \in S,\]</p><p>and fits everything jointly: the comparisons inform all the <span>$\lambda$</span>, the anchors pin down the calibration <span>$(a, b, \sigma^2)$</span>, and predictions for unanchored items land on the measurement scale.</p><p>We measure <strong>half the items</strong> (15 of the 30) and hold the other half out to test prediction. Anchoring every other item (<code>S01</code>, <code>S03</code>, …, <code>S29</code>) spreads the anchors across the strength range; the true calibration is <span>$a = 3$</span>, <span>$b = 2$</span>, <span>$\sigma = 0.1$</span>:</p><pre><code class="language-julia hljs">anchored_set = 1:2:n                              # S01, S03, …, S29
+held_out     = 2:2:n                              # S02, S04, …, S30
+
+y_true = 3.0 .+ 2.0 .* λ_true                     # noiseless measurement scale
+y_obs  = y_true[anchored_set] .+ 0.1 .* randn(rng, length(anchored_set))
+
+adata = AnchoredData(data, labels[anchored_set], y_obs)</code></pre><p>(A <code>Dict</code> works too: <code>AnchoredData(data, Dict(&quot;S01&quot; =&gt; y₁, &quot;S03&quot; =&gt; y₂, …))</code>.) Fit with the same <a href="../api/#ComparativeJudgement.Bayesian"><code>Bayesian</code></a> method — the priors are bundled in an <a href="../api/#ComparativeJudgement.AnchoredPrior"><code>AnchoredPrior</code></a>, whose defaults are weakly informative:</p><pre><code class="language-julia hljs">fitted_anchored = fit(BradleyTerryAnchored(), method, adata; rng=rng)</code></pre><p><a href="../api/#ComparativeJudgement.calibration"><code>calibration</code></a> returns the posterior means of the calibration parameters. The intercept is recovered almost exactly. The slope is attenuated relative to the truth — a classic errors-in-variables effect: each <span>$\lambda$</span> is located only to within ±0.4 by its ~40 comparisons, and regressing measurements on noisy predictors shrinks the slope. The noise variance <span>$\sigma^2$</span> inflates to absorb that mismatch, which keeps the predictive intervals honest:</p><pre><code class="language-julia hljs">calibration(fitted_anchored)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">(a = 3.008361919071365, b = 1.5822748785446203, σ² = 0.3775608538561079)</code></pre><h3 id="Predicting-the-held-out-half"><a class="docs-heading-anchor" href="#Predicting-the-held-out-half">Predicting the held-out half</a><a id="Predicting-the-held-out-half-1"></a><a class="docs-heading-anchor-permalink" href="#Predicting-the-held-out-half" title="Permalink"></a></h3><p><a href="../api/#ComparativeJudgement.predict"><code>predict</code></a> with no item argument returns the posterior-predictive mean measurement for every item. Compare the fifteen <em>never-measured</em> items against their true values:</p><pre><code class="language-julia hljs">preds = predict(fitted_anchored)
+[labels[held_out] round.(preds[held_out], digits=2) round.(y_true[held_out], digits=2)]</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">15×3 Matrix{Any}:
+ &quot;S02&quot;  1.37  0.21
+ &quot;S04&quot;  1.21  0.62
+ &quot;S06&quot;  1.21  1.03
+ &quot;S08&quot;  1.9   1.45
+ &quot;S10&quot;  1.89  1.86
+ &quot;S12&quot;  2.65  2.28
+ &quot;S14&quot;  2.84  2.69
+ &quot;S16&quot;  3.39  3.1
+ &quot;S18&quot;  3.38  3.52
+ &quot;S20&quot;  3.36  3.93
+ &quot;S22&quot;  3.76  4.34
+ &quot;S24&quot;  4.49  4.76
+ &quot;S26&quot;  5.28  5.17
+ &quot;S28&quot;  5.23  5.59
+ &quot;S30&quot;  5.03  6.0</code></pre><pre><code class="language-julia hljs">rmse = sqrt(sum((preds[held_out] .- y_true[held_out]).^2) / length(held_out))
+round(rmse, digits=3)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">0.518</code></pre><p>An RMSE of about 0.5 on a measurement scale spanning 0–6, driven entirely by each item&#39;s comparison record — none of these items was measured. The errors are not uniform: mid-scale items are predicted closely, while the held-out items at the ends of the scale (<code>S02</code>, <code>S30</code>) are pulled toward the centre, the prediction-scale footprint of the slope attenuation above. More comparisons per item would tighten both. For a single item, <code>predict</code> returns posterior-predictive draws, or a credible interval when <code>prob</code> is given:</p><pre><code class="language-julia hljs">predict(fitted_anchored, &quot;S30&quot;; prob=0.9)        # item S30 was never measured</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">(3.6127616274452428, 6.629323973719013)</code></pre><p>The intervals are honest about the comparison sparsity — wide enough to cover even the shrunk extremes. Check how many of the fifteen held-out true values fall inside their 90% predictive interval:</p><pre><code class="language-julia hljs">covered = count(held_out) do k
+    lo, hi = predict(fitted_anchored, k; prob=0.9)
+    lo &lt;= y_true[k] &lt;= hi
+end
+(covered, length(held_out))</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">(15, 15)</code></pre><p>The latent-scale accessors work exactly as in the plain Bayesian fit:</p><pre><code class="language-julia hljs">(posterior_mean(fitted_anchored)[end], probability(fitted_anchored, &quot;S30&quot;, &quot;S01&quot;))</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">(1.2782905966047793, 0.9636533647707306)</code></pre><div class="admonition is-info" id="Identifiability-and-centering-2ec50d4c4ef6381d"><header class="admonition-header">Identifiability and centering<a class="admonition-anchor" href="#Identifiability-and-centering-2ec50d4c4ef6381d" title="Permalink"></a></header><div class="admonition-body"><p>The anchor likelihood only constrains the combination <span>$a + b\lambda$</span>: shifting every <span>$\lambda$</span> by a constant while adjusting the intercept <span>$a$</span> leaves the model unchanged. The sampler therefore keeps <code>center=true</code> (sum-to-zero <span>$\lambda$</span>) for anchored fits too, and the intercept absorbs the location. Predictions are unaffected either way; centering just makes <span>$\lambda$</span> and <span>$(a, b)$</span> individually well-identified.</p></div></div></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../api/">API reference »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Wednesday 10 June 2026 20:06">Wednesday 10 June 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
