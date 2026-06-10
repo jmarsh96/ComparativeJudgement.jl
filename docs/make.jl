@@ -14,6 +14,8 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
+        "Bradley–Terry models" => "bradley_terry.md",
+        "API reference" => "api.md",
     ],
 )
 

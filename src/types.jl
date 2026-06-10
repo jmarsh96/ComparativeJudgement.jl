@@ -1,29 +1,100 @@
+"""
+    AbstractComparativeModel
+
+Supertype of all comparative judgement models.
+"""
 abstract type AbstractComparativeModel end
 
+"""
+    PairwiseModel <: AbstractComparativeModel
+
+Supertype of models for pairwise comparison data (one winner per comparison).
+"""
 abstract type PairwiseModel <: AbstractComparativeModel end
+
+"""
+    RankingModel <: AbstractComparativeModel
+
+Supertype of models for full or partial ranking data.
+"""
 abstract type RankingModel <: AbstractComparativeModel end
 
+"""
+    BradleyTerry()
+
+The Bradley–Terry model for pairwise comparisons: each item has a latent
+strength λ and `P(i beats j) = logistic(λᵢ − λⱼ)`. Fit with [`MLE`](@ref) or
+[`Bayesian`](@ref) inference via [`fit`](@ref).
+"""
 struct BradleyTerry <: PairwiseModel end
+
+"""
+    PlackettLuce()
+
+The Plackett–Luce ranking model. Placeholder — no inference implemented yet.
+"""
 struct PlackettLuce <: RankingModel end
+
+"""
+    ThurstoneCaseV(distribution)
+
+Thurstone's Case V pairwise comparison model. Placeholder — no inference
+implemented yet.
+"""
 struct ThurstoneCaseV <: PairwiseModel
     distribution::Symbol
 end
 
-# Wrapper composing any comparative model with anchor measurements that
-# calibrate the latent scale via y = a + b·λ + ε.
+"""
+    Anchored(model)
+
+Wrapper composing any comparative model with anchor measurements that
+calibrate the latent scale via `y = a + b·λ + ε`. Fit with an
+[`AnchoredData`](@ref) wrapping the comparison data, e.g.
+
+```julia
+fit(BradleyTerryAnchored(), AnchoredData(data, Dict("A" => 3.1, "C" => 4.5)))
+```
+"""
 struct Anchored{M <: AbstractComparativeModel} <: AbstractComparativeModel
     model::M
 end
 
+"""
+    BradleyTerryAnchored()
+
+Alias for `Anchored(BradleyTerry())`: the joint Bradley–Terry + linear
+calibration model. See [`Anchored`](@ref) and [`fit`](@ref).
+"""
 const BradleyTerryAnchored = Anchored{BradleyTerry}
 BradleyTerryAnchored() = Anchored(BradleyTerry())
 
+"""
+    InferenceMethod
+
+Supertype of inference methods accepted by [`fit`](@ref).
+"""
 abstract type InferenceMethod end
+
+"""
+    MLE()
+
+Maximum-likelihood estimation.
+"""
 struct MLE <: InferenceMethod end
 
-# `center` defaults to true for anchored models too: the anchor likelihood
-# only constrains a + b·λ, so λ's location is shared with the intercept and
-# pinned down just by weak priors — re-centering removes that flat direction.
+"""
+    Bayesian(; n_samples=2000, n_burnin=500, center=true, thin=1)
+
+MCMC (Gibbs sampling) inference. Runs `n_burnin` warm-up sweeps, then keeps
+every `thin`-th of the following `thin × n_samples` sweeps, so the result
+always holds `n_samples` posterior draws.
+
+`center` re-centres the latent strengths to sum to zero after every sweep.
+It defaults to `true` for anchored models too: the anchor likelihood only
+constrains `a + b·λ`, so λ's location is shared with the intercept and pinned
+down just by weak priors — re-centering removes that flat direction.
+"""
 struct Bayesian <: InferenceMethod
     n_samples::Int
     n_burnin::Int
@@ -37,8 +108,20 @@ struct Bayesian <: InferenceMethod
     end
 end
 
+"""
+    AbstractPrior
+
+Supertype of prior specifications for [`Bayesian`](@ref) inference.
+"""
 abstract type AbstractPrior end
 
+"""
+    NormalPrior(μ, Σ)
+    NormalPrior(K; scale=10.0)
+
+Multivariate normal prior `N(μ, Σ)`. The convenience constructor gives a
+`K`-variate `N(0, scale·I)`.
+"""
 struct NormalPrior <: AbstractPrior
     μ::Vector{Float64}
     Σ::Matrix{Float64}
@@ -51,6 +134,12 @@ struct NormalPrior <: AbstractPrior
 end
 NormalPrior(K::Int; scale::Float64=10.0) = NormalPrior(zeros(K), scale * Matrix{Float64}(I, K, K))
 
+"""
+    InverseGammaPrior(α, β)
+
+Inverse-gamma prior with shape `α > 0` and scale `β > 0`, used for variance
+parameters.
+"""
 struct InverseGammaPrior <: AbstractPrior
     α::Float64
     β::Float64
@@ -61,9 +150,14 @@ struct InverseGammaPrior <: AbstractPrior
     end
 end
 
-# Priors for an anchored model: a ridge precision τ² on the latent strengths,
-# a bivariate normal prior on the calibration coefficients β = (a, b), and an
-# inverse-gamma prior on the anchor noise variance σ².
+"""
+    AnchoredPrior(; τ²=0.01, β_prior=NormalPrior(2), σ²_prior=InverseGammaPrior(2.0, 1.0))
+
+Priors for an [`Anchored`](@ref) model: a ridge precision `τ²` on the latent
+strengths, a bivariate [`NormalPrior`](@ref) on the calibration coefficients
+`β = (a, b)`, and an [`InverseGammaPrior`](@ref) on the anchor noise
+variance `σ²`.
+"""
 struct AnchoredPrior <: AbstractPrior
     τ²::Float64
     β_prior::NormalPrior
@@ -80,6 +174,13 @@ function AnchoredPrior(; τ²::Real=0.01, β_prior::NormalPrior=NormalPrior(2),
     return AnchoredPrior(τ², β_prior, σ²_prior)
 end
 
+"""
+    BTMCMCSamples
+
+Posterior draws from a [`Bayesian`](@ref) Bradley–Terry fit: the
+`n_samples × K` matrix of latent strength draws and the per-draw
+log-likelihoods.
+"""
 struct BTMCMCSamples
     samples::Matrix{Float64}          # n_samples × K
     loglikelihoods::Vector{Float64}   # n_samples, one per post-burnin draw
@@ -87,6 +188,12 @@ struct BTMCMCSamples
     n_burnin::Int
 end
 
+"""
+    PairwiseData(wins, labels)
+
+Pairwise comparison data: `wins[i, j]` counts how many times item `i` beat
+item `j`, and `labels` names the items (any element type).
+"""
 struct PairwiseData{L}
     wins::Matrix{Int}
     labels::Vector{L}
@@ -99,8 +206,14 @@ struct PairwiseData{L}
     end
 end
 
-# Comparison data of any kind augmented with anchor measurements y for the
-# subset S of items given by anchor_idx (indices into the item labels).
+"""
+    AnchoredData(data, anchor_labels, anchor_values)
+    AnchoredData(data, anchors::AbstractDict)
+
+Comparison data augmented with anchor measurements `y` for a subset of
+items, identified by label. Used to fit [`Anchored`](@ref) models, which
+calibrate the latent scale via `y = a + b·λ + ε`.
+"""
 struct AnchoredData{D, L}
     data::D
     anchor_idx::Vector{Int}
@@ -127,8 +240,13 @@ function AnchoredData(data::PairwiseData{L}, anchors::AbstractDict{L, <:Real}) w
     return AnchoredData(data, anchor_labels, anchor_values)
 end
 
-# Posterior draws for an anchored model: latent strengths λ, calibration
-# coefficients β = (a, b), and anchor noise variance σ².
+"""
+    AnchoredMCMCSamples
+
+Posterior draws from an [`Anchored`](@ref) model fit: latent strengths λ
+(`n_samples × n`), calibration coefficients `β = (a, b)` (`n_samples × 2`),
+anchor noise variances `σ²`, and per-draw joint log-likelihoods.
+"""
 struct AnchoredMCMCSamples
     λ_samples::Matrix{Float64}        # n_samples × n
     β_samples::Matrix{Float64}        # n_samples × 2 (columns a, b)
@@ -139,6 +257,16 @@ struct AnchoredMCMCSamples
     thin::Int
 end
 
+"""
+    FittedComparativeModel
+
+The result of [`fit`](@ref): bundles the model, the inference method, the
+raw fitting result (an `Optim` result for [`MLE`](@ref), a posterior-draws
+container for [`Bayesian`](@ref)), the item labels, and convergence info.
+Query it with the accessor functions ([`strengths`](@ref),
+[`probability`](@ref), [`posterior_mean`](@ref), [`predict`](@ref), …)
+rather than via `result` directly.
+"""
 struct FittedComparativeModel{M <: AbstractComparativeModel, I <: InferenceMethod, R, L}
     model::M
     method::I

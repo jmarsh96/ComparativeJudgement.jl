@@ -12,7 +12,7 @@ export InferenceMethod, MLE, Bayesian
 export PairwiseData, AnchoredData, FittedComparativeModel
 export AbstractPrior, NormalPrior, InverseGammaPrior, AnchoredPrior
 export BTMCMCSamples, AnchoredMCMCSamples
-export fit, loglikelihood, probability, predict, calibration
+export fit, loglikelihood, probability, predict, calibration, strengths
 export posterior_mean, posterior_std, credible_interval
 
 include("types.jl")

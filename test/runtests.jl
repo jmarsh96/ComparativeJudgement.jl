@@ -71,6 +71,27 @@ using Statistics: mean, var
         @test_throws ArgumentError probability(fitted, "A", "C")
     end
 
+    @testset "strengths" begin
+        # item 3 dominates item 2 dominates item 1
+        wins = [0 5 2; 15 0 5; 18 15 0]
+        data = PairwiseData(wins, ["a", "b", "c"])
+
+        mle = fit(BradleyTerry(), MLE(), data)
+        λ̂ = strengths(mle)
+        @test length(λ̂) == 3
+        @test abs(sum(λ̂)) < 1e-10           # centred
+        @test issorted(λ̂)                    # matches the dominance ordering
+
+        rng = MersenneTwister(11)
+        bayes = fit(BradleyTerry(), Bayesian(n_samples=200, n_burnin=100), data; rng=rng)
+        @test strengths(bayes) == posterior_mean(bayes)
+
+        adata = AnchoredData(data, ["a", "c"], [1.0, 3.0])
+        anchored = fit(BradleyTerryAnchored(), Bayesian(n_samples=200, n_burnin=100),
+                       adata; rng=rng)
+        @test strengths(anchored) == posterior_mean(anchored)
+    end
+
     @testset "NormalPrior" begin
         p = NormalPrior(3)
         @test length(p.μ) == 3

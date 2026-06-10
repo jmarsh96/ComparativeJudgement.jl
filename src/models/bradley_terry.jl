@@ -33,6 +33,13 @@ function _bt_neg_grad!(G::AbstractVector, θ_free::AbstractVector, wins::Matrix{
     return G
 end
 
+"""
+    fit(model::BradleyTerry, method::MLE, data::PairwiseData)
+
+Maximum-likelihood fit of the Bradley–Terry model via L-BFGS. The first
+item's strength is fixed at zero during optimisation for identifiability;
+[`strengths`](@ref) returns the centred estimates.
+"""
 function fit(model::BradleyTerry, method::MLE, data::PairwiseData{L}) where {L}
     wins = data.wins
     n = length(data.labels)
@@ -65,6 +72,11 @@ end
 
 function loglikelihood(fitted::FittedComparativeModel{BradleyTerry, MLE})
     return -Optim.minimum(fitted.result)
+end
+
+function strengths(fitted::FittedComparativeModel{BradleyTerry, MLE})
+    θ = _full_theta(Optim.minimizer(fitted.result))
+    return θ .- mean(θ)
 end
 
 function probability(fitted::FittedComparativeModel{BradleyTerry, MLE}, i::Integer, j::Integer)
@@ -130,6 +142,17 @@ function log1pexp(x::Float64)
     return log1p(exp(x))
 end
 
+"""
+    fit(model::BradleyTerry, method::Bayesian, data::PairwiseData,
+        [prior::NormalPrior]; rng=Random.default_rng())
+
+Bayesian fit of the Bradley–Terry model by Pólya-Gamma augmented Gibbs
+sampling. `prior` is a `K`-variate [`NormalPrior`](@ref) on the latent
+strengths (default `NormalPrior(K)`). The result holds posterior draws
+([`BTMCMCSamples`](@ref)); query them with [`posterior_mean`](@ref),
+[`posterior_std`](@ref), [`credible_interval`](@ref) and
+[`probability`](@ref).
+"""
 function fit(model::BradleyTerry, method::Bayesian, data::PairwiseData{L},
              prior::NormalPrior; rng::AbstractRNG=Random.default_rng()) where {L}
     K = length(data.labels)
@@ -237,6 +260,10 @@ function loglikelihood(fitted::FittedComparativeModel{BradleyTerry, Bayesian})
     return fitted.result.loglikelihoods
 end
 
+function strengths(fitted::FittedComparativeModel{BradleyTerry, Bayesian})
+    return posterior_mean(fitted)
+end
+
 function probability(fitted::FittedComparativeModel{BradleyTerry, Bayesian},
                      i::Integer, j::Integer)
     S = fitted.result.samples
@@ -285,6 +312,19 @@ function _anchored_init_β(λS::Vector{Float64}, y::Vector{Float64}, prior::Anch
     return a, b, σ²
 end
 
+"""
+    fit(model::Anchored{BradleyTerry}, [method::Bayesian],
+        data::AnchoredData, [prior::AnchoredPrior]; rng=Random.default_rng())
+
+Joint Bayesian fit of the anchored Bradley–Terry model by Gibbs sampling:
+pairwise comparisons inform the latent strengths λ through the Bradley–Terry
+likelihood (Pólya-Gamma augmented), while anchor measurements
+`y = a + b·λ + ε` for the anchored subset calibrate the latent scale. The
+result holds posterior draws of λ, `β = (a, b)` and `σ²`
+([`AnchoredMCMCSamples`](@ref)); query them with [`posterior_mean`](@ref),
+[`credible_interval`](@ref), [`calibration`](@ref), [`predict`](@ref) and
+[`probability`](@ref).
+"""
 function fit(model::Anchored{BradleyTerry}, method::Bayesian,
              data::AnchoredData{PairwiseData{L}, L},
              prior::AnchoredPrior=AnchoredPrior();
@@ -438,6 +478,10 @@ end
 
 function loglikelihood(fitted::FittedComparativeModel{<:Anchored, Bayesian})
     return fitted.result.loglikelihoods
+end
+
+function strengths(fitted::FittedComparativeModel{<:Anchored, Bayesian})
+    return posterior_mean(fitted)
 end
 
 function calibration(fitted::FittedComparativeModel{<:Anchored, Bayesian})
