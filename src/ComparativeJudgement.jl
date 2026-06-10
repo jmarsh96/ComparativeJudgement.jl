@@ -7,18 +7,18 @@ using Optim: Optim, optimize, LBFGS
 
 export AbstractComparativeModel, PairwiseModel, RankingModel
 export BradleyTerry, PlackettLuce, ThurstoneCaseV
+export Anchored, BradleyTerryAnchored
 export InferenceMethod, MLE, Bayesian
-export PairwiseData, FittedComparativeModel
-export AbstractPrior, NormalPrior
-export BTMCMCSamples
-export fit, loglikelihood, probability
+export PairwiseData, AnchoredData, FittedComparativeModel
+export AbstractPrior, NormalPrior, InverseGammaPrior, AnchoredPrior
+export BTMCMCSamples, AnchoredMCMCSamples
+export fit, loglikelihood, probability, predict, calibration
 export posterior_mean, posterior_std, credible_interval
 
 include("types.jl")
 include("interface.jl")
-include("models/bradley_terry.jl")
-include("models/polya_gamma.jl")
-include("models/bayesian_bradley_terry.jl")
 include("utils.jl")
+include("polya_gamma.jl")
+include("models/bradley_terry.jl")
 
 end
