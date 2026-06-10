@@ -20,6 +20,10 @@ BradleyTerryAnchored() = Anchored(BradleyTerry())
 
 abstract type InferenceMethod end
 struct MLE <: InferenceMethod end
+
+# `center` defaults to true for anchored models too: the anchor likelihood
+# only constrains a + b·λ, so λ's location is shared with the intercept and
+# pinned down just by weak priors — re-centering removes that flat direction.
 struct Bayesian <: InferenceMethod
     n_samples::Int
     n_burnin::Int

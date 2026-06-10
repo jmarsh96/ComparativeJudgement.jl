@@ -91,9 +91,26 @@ using Statistics: mean, var
 
         m2 = Bayesian(n_samples=100, n_burnin=50, center=false)
         @test m2.n_samples == 100
+        @test m2.center    == false
 
         @test_throws ArgumentError Bayesian(n_samples=0)
         @test_throws ArgumentError Bayesian(n_burnin=-1)
+    end
+
+    @testset "Centering — anchored model" begin
+        # Centering stays on by default for anchored models: the anchor
+        # likelihood only constrains a + b·λ, so λ's location trades off
+        # against the intercept and is otherwise pinned only by weak priors.
+        wins = [0 8 2; 4 0 7; 9 3 0]
+        data = AnchoredData(PairwiseData(wins, ["A", "B", "C"]), ["A", "C"], [1.0, 2.0])
+        f_default = fit(BradleyTerryAnchored(), Bayesian(n_samples=100, n_burnin=50),
+                        data; rng=MersenneTwister(5))
+        f_off     = fit(BradleyTerryAnchored(),
+                        Bayesian(n_samples=100, n_burnin=50, center=false),
+                        data; rng=MersenneTwister(5))
+        row_means(f) = vec(mean(f.result.λ_samples, dims=2))
+        @test all(abs.(row_means(f_default)) .< 1e-10)
+        @test any(abs.(row_means(f_off)) .> 1e-6)
     end
 
     @testset "PG sampler — PG(1,0) mean ≈ 0.25" begin
