@@ -2,3 +2,6 @@
 ComparativeJudgement = "8b2cd0c5-0b38-4f62-b1bf-56047c74b2ce"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
+
+[compat]
+Plots = "1.41.6"
