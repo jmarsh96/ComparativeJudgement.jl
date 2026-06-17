@@ -229,6 +229,10 @@ function fit(model::BradleyTerry, method::Bayesian, data::PairwiseData{L},
                 V_buf[j, i] -= op
             end
         end
+        # Small diagonal ridge guards against PosDefException when PG weights
+        # approach zero and V_buf ≈ Σ_inv, which can have numerical errors
+        # O(cond(Σ) * eps) from matrix inversion (critical for large ill-conditioned Σ).
+        @inbounds for k in 1:K; V_buf[k, k] += 1e-10; end
         C = cholesky!(Symmetric(V_buf))
 
         # Posterior mean: m = V_inv \ rhs_const (in-place)
