@@ -96,11 +96,15 @@ function probability(fitted::FittedComparativeModel{BradleyTerry, MLE, R, L},
 end
 struct _AggregatedPairData
     X::Matrix{Float64}          # P×K design matrix (kept for loglik / external use)
-    pairs::Vector{Tuple{Int,Int}} # (i, j) index of each aggregated pair
+    pairs::Vector{Tuple{Int,Int}} # (i, j) index of each aggregated pair (i < j)
     Nvec::Vector{Int}           # trial counts per pair
     κ::Vector{Float64}          # y - N/2 per pair (constant)
     P::Int
     K::Int
+    # Upper-triangle (i,j) entries with i<j that are NOT a pair, in column-major
+    # order so zeroing them in V_buf is cache-friendly. Used to reset Cholesky
+    # fill-in without a full O(K²) fill! each iteration.
+    upper_zero::Vector{Tuple{Int,Int}}
 end
 
 function _aggregate_pairs(wins::Matrix{Int}, K::Int)
@@ -121,7 +125,12 @@ function _aggregate_pairs(wins::Matrix{Int}, K::Int)
         X[p, j] = -1.0
     end
     κ = Float64.(yvec) .- Float64.(Nvec) ./ 2
-    return _AggregatedPairData(X, pairs, Nvec, κ, P, K)
+    pair_set = Set{Tuple{Int,Int}}(pairs)
+    upper_zero = Tuple{Int,Int}[]
+    for j in 2:K, i in 1:(j-1)   # column-major order for cache-friendly V_buf access
+        (i, j) ∉ pair_set && push!(upper_zero, (i, j))
+    end
+    return _AggregatedPairData(X, pairs, Nvec, κ, P, K, upper_zero)
 end
 
 # log p(wins | λ) using aggregated pair representation
@@ -167,6 +176,10 @@ function fit(model::BradleyTerry, method::Bayesian, data::PairwiseData{L},
     Σ_inv_μ     = Σ_inv * prior.μ
     Xt_κ        = agg.X' * agg.κ    # K-vector, constant
     rhs_const   = Σ_inv_μ .+ Xt_κ
+    # For diagonal Σ (the common default), avoid copying the full K×K matrix each
+    # iteration: only zero the non-pair upper-triangle entries from Cholesky fill-in,
+    # then write diagonal and pair entries directly — O(K + P) instead of O(K²).
+    diag_Σ_inv  = isdiag(Σ_inv) ? diag(Σ_inv) : nothing
 
     total = method.n_samples + method.n_burnin
     samples        = Matrix{Float64}(undef, method.n_samples, K)
@@ -175,37 +188,47 @@ function fit(model::BradleyTerry, method::Bayesian, data::PairwiseData{L},
     # Pre-allocate all per-iteration buffers to avoid heap pressure in the loop.
     λ     = zeros(K)
     ω     = Vector{Float64}(undef, agg.P)
-    ψ     = Vector{Float64}(undef, agg.P)
-    XtΩX  = Matrix{Float64}(undef, K, K)
     V_buf = Matrix{Float64}(undef, K, K)   # will hold V_inv, then its Cholesky
     m     = Vector{Float64}(undef, K)
     z     = Vector{Float64}(undef, K)
 
     for s in 1:total
-        # Step 1: ψ = X * λ — exploit X sparsity (each row is +e_i − e_j)
+        # Sample ω | λ (ψ = λᵢ − λⱼ computed inline, no separate buffer needed)
         @inbounds for p in 1:agg.P
             i, j = agg.pairs[p]
-            ψ[p] = λ[i] - λ[j]
+            ω[p] = _sample_pg(rng, agg.Nvec[p], λ[i] - λ[j])
         end
 
-        # Sample ω | λ
-        @inbounds for p in 1:agg.P
-            ω[p] = _sample_pg(rng, agg.Nvec[p], ψ[p])
+        # Build V_inv = Σ_inv + XtΩX directly into V_buf.
+        # Diagonal prior (common case): O(K + P) — zero only Cholesky fill-in entries,
+        # then write diagonal and pair off-diagonals. Each (i,j) pair appears once so
+        # we SET V_buf[i,j] = −ω instead of accumulating.
+        # General prior: O(K²) copy + O(P) updates.
+        if diag_Σ_inv !== nothing
+            @inbounds for (i, j) in agg.upper_zero
+                V_buf[i, j] = 0.0
+            end
+            @inbounds for i in 1:K
+                V_buf[i, i] = diag_Σ_inv[i]
+            end
+            @inbounds for p in 1:agg.P
+                i, j = agg.pairs[p]
+                op = ω[p]
+                V_buf[i, i] += op
+                V_buf[j, j] += op
+                V_buf[i, j] = -op   # upper triangle only; Symmetric reads upper
+            end
+        else
+            copyto!(V_buf, Σ_inv)
+            @inbounds for p in 1:agg.P
+                i, j = agg.pairs[p]
+                op = ω[p]
+                V_buf[i, i] += op
+                V_buf[j, j] += op
+                V_buf[i, j] -= op
+                V_buf[j, i] -= op
+            end
         end
-
-        # Step 2: XtΩX = X'ΩX — sparse rank-1 updates (4 ops per pair vs O(P·K²))
-        fill!(XtΩX, 0.0)
-        @inbounds for p in 1:agg.P
-            i, j  = agg.pairs[p]
-            op    = ω[p]
-            XtΩX[i, i] += op
-            XtΩX[j, j] += op
-            XtΩX[i, j] -= op
-            XtΩX[j, i] -= op
-        end
-
-        # V_inv = Σ_inv + XtΩX; Cholesky in-place (no allocation)
-        V_buf .= Σ_inv .+ XtΩX
         C = cholesky!(Symmetric(V_buf))
 
         # Posterior mean: m = V_inv \ rhs_const (in-place)
@@ -363,37 +386,41 @@ function fit(model::Anchored{BradleyTerry}, method::Bayesian,
 
     # Pre-allocate all per-iteration buffers to avoid heap pressure in the loop.
     ω     = Vector{Float64}(undef, agg.P)
-    ψ     = Vector{Float64}(undef, agg.P)
     V_buf = Matrix{Float64}(undef, K, K)   # precision, then its Cholesky
     h     = Vector{Float64}(undef, K)
     m     = Vector{Float64}(undef, K)
     z     = Vector{Float64}(undef, K)
 
     for s in 1:total
-        # ω | λ — Pólya-Gamma step
+        # ω | λ — Pólya-Gamma step (ψ computed inline, no separate buffer)
         @inbounds for p in 1:agg.P
             i, j = agg.pairs[p]
-            ψ[p] = λ[i] - λ[j]
-            ω[p] = _sample_pg(rng, agg.Nvec[p], ψ[p])
+            ω[p] = _sample_pg(rng, agg.Nvec[p], λ[i] - λ[j])
         end
 
-        # λ | ω, β, σ² — precision XᵗΩX + (b²/σ²)P_S + τ²I via sparse assembly
-        fill!(V_buf, 0.0)
+        # λ | ω, β, σ² — build V_inv = τ²I + XtΩX + (b²/σ²)P_S into V_buf.
+        # Prior is always diagonal (τ²I), so use O(K + P) assembly: zero only the
+        # non-pair upper-triangle entries left by the previous Cholesky, then set
+        # diagonal and pair off-diagonals directly.
+        @inbounds for (i, j) in agg.upper_zero
+            V_buf[i, j] = 0.0
+        end
+        @inbounds for i in 1:K
+            V_buf[i, i] = τ²
+        end
         @inbounds for p in 1:agg.P
             i, j = agg.pairs[p]
             op   = ω[p]
             V_buf[i, i] += op
             V_buf[j, j] += op
-            V_buf[i, j] -= op
-            V_buf[j, i] -= op
-        end
-        @inbounds for i in 1:K
-            V_buf[i, i] += τ²
+            V_buf[i, j] = -op   # SET (each pair appears once); upper triangle only
         end
         h .= Xt_κ
+        b2_σ2 = b^2 / σ²
+        b_σ2  = b / σ²
         @inbounds for (k, i) in enumerate(S)
-            V_buf[i, i] += b^2 / σ²
-            h[i]        += (b / σ²) * (y[k] - a)
+            V_buf[i, i] += b2_σ2
+            h[i]        += b_σ2 * (y[k] - a)
         end
         C = cholesky!(Symmetric(V_buf))
         m .= h

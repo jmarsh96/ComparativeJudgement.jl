@@ -1,6 +1,6 @@
 module ComparativeJudgement
 
-using LinearAlgebra: LinearAlgebra, Diagonal, Symmetric, cholesky, cholesky!, ldiv!, I, dot, inv
+using LinearAlgebra: LinearAlgebra, Diagonal, Symmetric, cholesky, cholesky!, ldiv!, I, dot, inv, isdiag, diag
 using Statistics: mean, std, quantile
 using Random: AbstractRNG, randn, randn!, rand, randexp, Random
 using Optim: Optim, optimize, LBFGS

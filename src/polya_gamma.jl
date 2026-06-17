@@ -4,10 +4,14 @@
 const _PG_COEF = π^2 / 8
 
 # Inverse Gaussian IG(μ, λ=1) sample via Michael-Schucany-Haas algorithm.
+# The textbook formula μ + μ²y/2 − μ/2·√(4μy + μ²y²) suffers catastrophic
+# cancellation when t = μy/2 is large (ψ near 0 or μ large).  The equivalent
+# rationalised form μ/[(1+t)+√(t(t+2))] avoids this and gives the same value
+# in exact arithmetic while staying O(1 ULP) accurate in floating point.
 function _sample_ig(rng::AbstractRNG, μ::Float64)::Float64
     ν = randn(rng)
-    y = ν^2
-    x = μ + μ^2 * y / 2 - μ / 2 * sqrt(4μ * y + μ^2 * y^2)
+    t = μ * ν^2 / 2
+    x = μ / ((1.0 + t) + sqrt(t * (t + 2.0)))
     u = rand(rng)
     return u <= μ / (μ + x) ? x : μ^2 / x
 end
