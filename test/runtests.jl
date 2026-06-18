@@ -234,17 +234,47 @@ using LinearAlgebra: diag, dot
         pdata = PairwiseData(wins, ["A", "B", "C"])
 
         data = AnchoredData(pdata, ["A", "C"], [1.0, 5.0])
-        @test data.anchor_idx == [1, 3]
+        @test data.anchor_groups == [[1], [3]]      # single-item anchors → size-1 groups
         @test data.anchor_values == [1.0, 5.0]
 
         ddata = AnchoredData(pdata, Dict("B" => 3))
-        @test ddata.anchor_idx == [2]
+        @test ddata.anchor_groups == [[2]]
         @test ddata.anchor_values == [3.0]
 
         @test_throws ArgumentError AnchoredData(pdata, ["A", "D"], [1.0, 2.0])
         @test_throws DimensionMismatch AnchoredData(pdata, ["A"], [1.0, 2.0])
         @test_throws ArgumentError AnchoredData(pdata, ["A", "A"], [1.0, 2.0])
         @test_throws ArgumentError AnchoredData(pdata, String[], Float64[])
+    end
+
+    @testset "AnchoredData — group anchors" begin
+        wins = [0 3 1 2; 1 0 2 1; 2 1 0 3; 1 2 1 0]
+        pdata = PairwiseData(wins, ["A", "B", "C", "D"])
+
+        # Group anchors: each measurement averages a group of items.
+        gdata = AnchoredData(pdata, [["A", "B"], ["C", "D"]], [1.0, 5.0])
+        @test gdata isa AnchoredData{PairwiseData{String}, String}
+        @test gdata.anchor_groups == [[1, 2], [3, 4]]
+        @test gdata.anchor_values == [1.0, 5.0]
+
+        # Mixed single + group anchors, and an item shared across groups.
+        mdata = AnchoredData(pdata, [["A"], ["B", "C", "D"], ["A", "D"]], [1.0, 2.0, 3.0])
+        @test mdata.anchor_groups == [[1], [2, 3, 4], [1, 4]]
+
+        # Pairs convenience constructor.
+        pdata2 = AnchoredData(pdata, ["A", "B"] => 1.0, ["C"] => 4.0)
+        @test pdata2.anchor_groups == [[1, 2], [3]]
+        @test pdata2.anchor_values == [1.0, 4.0]
+
+        # Single-label and group constructors dispatch as expected.
+        @test AnchoredData(pdata, ["A", "C"], [1.0, 2.0]).anchor_groups == [[1], [3]]
+
+        # Validation.
+        @test_throws ArgumentError AnchoredData(pdata, [["A", "Z"]], [1.0])      # unknown label
+        @test_throws ArgumentError AnchoredData(pdata, [["A", "A"]], [1.0])      # dup within group
+        @test_throws ArgumentError AnchoredData(pdata, [String[]], [1.0])        # empty group
+        @test_throws DimensionMismatch AnchoredData(pdata, [["A"], ["B"]], [1.0])
+        @test_throws ArgumentError AnchoredData(pdata, Vector{String}[], Float64[])
     end
 
     @testset "Gamma sampler — moments" begin
@@ -564,9 +594,11 @@ using LinearAlgebra: diag, dot
         cd = CovariateData(PairwiseData(wins, ["A", "B", "C"]), [1.0; 0.5; -1.0][:, :], [:x])
         ad = AnchoredData(cd, ["A", "C"], [1.0, 5.0])
         @test ad isa AnchoredData{CovariateData{String}, String}
-        @test ad.anchor_idx == [1, 3]
+        @test ad.anchor_groups == [[1], [3]]
         @test ad.anchor_values == [1.0, 5.0]
-        @test AnchoredData(cd, Dict("B" => 3.0)).anchor_idx == [2]
+        @test AnchoredData(cd, Dict("B" => 3.0)).anchor_groups == [[2]]
+        # group anchors over a CovariateData resolve against the inner labels
+        @test AnchoredData(cd, [["A", "B"], ["C"]], [1.0, 2.0]).anchor_groups == [[1, 2], [3]]
         @test_throws ArgumentError AnchoredData(cd, ["A", "D"], [1.0, 2.0])
         @test_throws DimensionMismatch AnchoredData(cd, ["A"], [1.0, 2.0])
         @test_throws ArgumentError AnchoredData(cd, ["A", "A"], [1.0, 2.0])
@@ -693,6 +725,78 @@ using LinearAlgebra: diag, dot
         @test sort(fs.result.selected) == [1, 2]
         @test keys(coefficient_intervals(fs)) == keys(coefficients(fs))
         @test !isempty(fs.result.trace)
+    end
+
+    @testset "Group-averaged anchors — weighted calibration" begin
+        # Deterministic check that _profile_calibration solves the weighted (σ²/n_g)
+        # least-squares problem, computed by hand below.
+        μ = [0.0, 1.0, 2.0]; y = [0.0, 1.0, 3.0]; w = [1.0, 1.0, 4.0]
+        a, b, σ², rss = ComparativeJudgement._profile_calibration(μ, y, w)
+        @test isapprox(b, 33 / 21; atol=1e-9)
+        @test isapprox(a, (13 - (33 / 21) * 9) / 6; atol=1e-9)
+        @test isapprox(σ², rss / 3; atol=1e-12)
+        # Unit weights reproduce ordinary OLS (the singleton path).
+        a1, b1, _, _ = ComparativeJudgement._profile_calibration(μ, y, ones(3))
+        @test isapprox(b1, 1.5; atol=1e-9) && isapprox(a1, -1/6; atol=1e-9)
+    end
+
+    @testset "Group-averaged anchors — recovery and equivalence" begin
+        rng = MersenneTwister(2718)
+        K = 48
+        βtrue = [1.5, -1.0, 0.0]
+        cd, λtrue = _simulate_covariate_data(rng, K, βtrue; n_per_pair=12)
+        labels = ["item$i" for i in 1:K]
+        a_true, b_true, σ_true = 2.0, 3.0, 0.25
+
+        # 12 groups of 4 consecutive items; anchor noise scaled by 1/√n_g.
+        groups = [collect(g) for g in Iterators.partition(1:K, 4)]
+        glabels = [["item$i" for i in g] for g in groups]
+        ng = length.(groups)
+        ygrp = [a_true + b_true * mean(λtrue[g]) for g in groups] .+
+               [σ_true / sqrt(n) for n in ng] .* randn(rng, length(groups))
+        adg = AnchoredData(cd, glabels, ygrp)
+        m = BradleyTerryCovariatesAnchored()
+
+        # MLE recovers β and the calibration slope from group means.
+        f = fit(m, MLE(), adg)
+        @test f.converged
+        β̂ = collect(values(coefficients(f)))
+        @test isapprox(β̂, βtrue; atol=0.4)
+        cal = calibration(f)
+        @test isapprox(cal.b, b_true; atol=0.6)
+        @test isapprox(cal.a, a_true; atol=0.8)
+        @test cor(strengths(f), λtrue) > 0.95
+
+        # Bayesian group fit recovers too.
+        fb = fit(m, Bayesian(n_samples=700, n_burnin=400), adg; rng=MersenneTwister(1))
+        @test isapprox(collect(values(coefficients(fb))), βtrue; atol=0.4)
+        @test isapprox(calibration(fb).b, b_true; atol=0.7)
+
+        # Plain anchored model with the same group anchors: slope recovers
+        # (intercept absorbs the sum-to-zero centring of λ, so is not compared).
+        adp = AnchoredData(cd.data, glabels, ygrp)
+        bp = fit(BradleyTerryAnchored(), Bayesian(n_samples=700, n_burnin=400), adp;
+                 rng=MersenneTwister(2))
+        @test isapprox(calibration(bp).b, b_true; atol=0.8)
+
+        # Singleton equivalence: passing labels is identical to size-1 groups.
+        S = collect(1:2:K)
+        ys = [a_true + b_true * λtrue[i] for i in S] .+ σ_true .* randn(rng, length(S))
+        ad_lab = AnchoredData(cd, labels[S], ys)
+        ad_g1  = AnchoredData(cd, [[labels[i]] for i in S], ys)
+        f_lab = fit(m, MLE(), ad_lab)
+        f_g1  = fit(m, MLE(), ad_g1)
+        @test collect(values(coefficients(f_lab))) ≈ collect(values(coefficients(f_g1)))
+        @test calibration(f_lab) == calibration(f_g1)
+        # …and for the plain anchored model under a shared seed.
+        adp_lab = AnchoredData(cd.data, labels[S], ys)
+        adp_g1  = AnchoredData(cd.data, [[labels[i]] for i in S], ys)
+        bl = fit(BradleyTerryAnchored(), Bayesian(n_samples=200, n_burnin=100), adp_lab;
+                 rng=MersenneTwister(9))
+        bg = fit(BradleyTerryAnchored(), Bayesian(n_samples=200, n_burnin=100), adp_g1;
+                 rng=MersenneTwister(9))
+        @test bl.result.λ_samples ≈ bg.result.λ_samples
+        @test bl.result.β_samples ≈ bg.result.β_samples
     end
 
 end

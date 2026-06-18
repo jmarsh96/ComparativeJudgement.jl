@@ -208,19 +208,34 @@ end
 
 """
     AnchoredData(data, anchor_labels, anchor_values)
+    AnchoredData(data, anchor_groups, anchor_values)
     AnchoredData(data, anchors::AbstractDict)
+    AnchoredData(data, group => value, ...)
 
-Comparison data augmented with anchor measurements `y` for a subset of
-items, identified by label. Used to fit [`Anchored`](@ref) models, which
-calibrate the latent scale via `y = a + b·λ + ε`.
+Comparison data augmented with anchor measurements `y`, used to fit
+[`Anchored`](@ref) models, which calibrate the latent scale via `y = a + b·λ + ε`.
+
+Each measurement targets either a **single item** (passed by label, as
+`anchor_labels::Vector`) or a **group of items** (passed as `anchor_groups`, a
+vector of label-vectors). A group anchor is modelled as the group *mean*,
+
+```
+y_g = a + b · mean_{i∈G_g}(λ_i) + ε_g,   ε_g ~ N(0, σ²/n_g),   n_g = |G_g|,
+```
+
+so a larger group is measured more precisely (variance `σ²/n_g`). Single-item
+anchors are the special case `n_g = 1`, identical to the original model. Single
+and group anchors may be mixed in one dataset, and an item may appear in more than
+one group. Internally every anchor is stored as a group of item indices in
+`anchor_groups::Vector{Vector{Int}}`.
 """
 struct AnchoredData{D, L}
     data::D
-    anchor_idx::Vector{Int}
+    anchor_groups::Vector{Vector{Int}}
     anchor_values::Vector{Float64}
-    function AnchoredData{D, L}(data::D, anchor_idx::Vector{Int},
+    function AnchoredData{D, L}(data::D, anchor_groups::Vector{Vector{Int}},
                                anchor_values::Vector{Float64}) where {D, L}
-        new{D, L}(data, anchor_idx, anchor_values)
+        new{D, L}(data, anchor_groups, anchor_values)
     end
 end
 
@@ -229,6 +244,14 @@ end
 # `CovariateData` method is defined after that type, below).
 _anchor_target_labels(data::PairwiseData) = data.labels
 
+# Resolve a label to its item index, or throw.
+function _resolve_anchor_label(labels, lbl)
+    idx = findfirst(==(lbl), labels)
+    idx === nothing && throw(ArgumentError("Anchor label $(lbl) not found in data labels"))
+    return idx
+end
+
+# Single-item anchors: each measurement targets one item (groups of size one).
 function AnchoredData(data, anchor_labels::Vector{L},
                       anchor_values::Vector{<:Real}) where {L}
     labels = _anchor_target_labels(data)
@@ -237,18 +260,39 @@ function AnchoredData(data, anchor_labels::Vector{L},
     length(anchor_values) == r || throw(DimensionMismatch(
         "Got $r anchor labels but $(length(anchor_values)) anchor values"))
     allunique(anchor_labels) || throw(ArgumentError("Anchor labels must be unique"))
-    anchor_idx = Vector{Int}(undef, r)
-    for (k, lbl) in enumerate(anchor_labels)
-        idx = findfirst(==(lbl), labels)
-        idx === nothing && throw(ArgumentError("Anchor label $(lbl) not found in data labels"))
-        anchor_idx[k] = idx
-    end
-    return AnchoredData{typeof(data), L}(data, anchor_idx, Vector{Float64}(anchor_values))
+    groups = [[_resolve_anchor_label(labels, lbl)] for lbl in anchor_labels]
+    return AnchoredData{typeof(data), L}(data, groups, Vector{Float64}(anchor_values))
 end
+
+# Group anchors: each measurement targets a group of items, modelled as the mean.
+function AnchoredData(data, anchor_groups::Vector{<:AbstractVector{L}},
+                      anchor_values::Vector{<:Real}) where {L}
+    labels = _anchor_target_labels(data)
+    G = length(anchor_groups)
+    G >= 1 || throw(ArgumentError("Need at least 1 anchor group, got none"))
+    length(anchor_values) == G || throw(DimensionMismatch(
+        "Got $G anchor groups but $(length(anchor_values)) anchor values"))
+    groups = Vector{Vector{Int}}(undef, G)
+    for (g, grp) in enumerate(anchor_groups)
+        isempty(grp) && throw(ArgumentError("Anchor group $g is empty"))
+        allunique(grp) || throw(ArgumentError("Items within anchor group $g must be unique"))
+        groups[g] = [_resolve_anchor_label(labels, lbl) for lbl in grp]
+    end
+    return AnchoredData{typeof(data), L}(data, groups, Vector{Float64}(anchor_values))
+end
+
+# Dict convenience: keys are labels (single-item) or label-vectors (groups).
 function AnchoredData(data, anchors::AbstractDict{L, <:Real}) where {L}
     anchor_labels = collect(keys(anchors))
     anchor_values = [Float64(anchors[lbl]) for lbl in anchor_labels]
     return AnchoredData(data, anchor_labels, anchor_values)
+end
+
+# Pairs convenience for group anchors: `AnchoredData(data, ["a","b"] => 3.0, ["c"] => 4.0)`.
+function AnchoredData(data, anchors::Pair{<:AbstractVector, <:Real}...)
+    groups = [collect(first(p)) for p in anchors]
+    values = Float64[last(p) for p in anchors]
+    return AnchoredData(data, groups, values)
 end
 
 """

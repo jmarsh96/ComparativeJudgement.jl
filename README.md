@@ -20,7 +20,8 @@ workflows:
 - **Anchored** (`BradleyTerryAnchored`) — a joint Bayesian model in which
   known measurements `y = a + b·λ + ε` for a subset of items calibrate the
   latent scale, so measurements can be predicted (with credible intervals)
-  for items that were never measured.
+  for items that were never measured. Anchors may apply to a single item or to
+  the *average* over a group of items (e.g. the mean mark of a batch of scripts).
 - **Covariates** (`BradleyTerryCovariates`) — strengths modelled as a linear
   function of item covariates, `λ_i = zᵢᵀβ`. Fit by MLE or Bayesian inference,
   with model selection via stepwise AIC/BIC (`StepwiseMLE`) or shrinkage /
@@ -28,8 +29,8 @@ workflows:
 - **Anchored covariates** (`BradleyTerryCovariatesAnchored`) — the covariate and
   anchored models composed: covariate-driven strengths *and* calibration to anchor
   measurements, fit jointly. Supports the same MLE / Bayesian / selection workflows,
-  and can predict a measurement for an item that was never compared or measured, from
-  its covariates alone.
+  single-item or group-averaged anchors, and can predict a measurement for an item that
+  was never compared or measured, from its covariates alone.
 
 ## Installation
 
@@ -80,15 +81,21 @@ afit = fit(BradleyTerryCovariatesAnchored(), MLE(), acd)
 coefficients(afit)                                  # β
 calibration(afit)                                   # (a, b, σ²)
 predict(afit, [0.0, 1.0])                           # ŷ for a new item, from covariates
+
+# anchors can also be group averages — e.g. the mean measurement of a batch of items
+gad = AnchoredData(cd, [["A", "B"], ["C"]], [2.1, 3.7])
+fit(BradleyTerryCovariatesAnchored(), MLE(), gad)
 ```
 
 ## Documentation
 
 The [documentation](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/)
 includes a [worked tutorial](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/bradley_terry/)
-fitting the MLE, Bayesian and anchored models to simulated data — including an
-anchored example that measures half the items and predicts the measurements of
-the other half — a [covariate-model tutorial](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/covariate_bt/)
+fitting the MLE and Bayesian models to simulated data, an
+[anchored-model tutorial](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/anchored_bt/)
+that measures half the items and predicts the measurements of the other half (and
+covers group-averaged anchors), a
+[covariate-model tutorial](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/covariate_bt/)
 covering MLE, stepwise selection and shrinkage / spike-and-slab priors, an
 [anchored-covariate tutorial](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/covariate_anchored_bt/)
 that combines the two and predicts measurements for unseen items, and a

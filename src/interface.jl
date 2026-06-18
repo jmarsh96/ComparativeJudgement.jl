@@ -11,7 +11,8 @@ sensible default ([`MLE`](@ref) for [`BradleyTerry`](@ref) and
 Bayesian fits accept a prior and an `rng` keyword for reproducibility. The
 anchored covariate model ([`BradleyTerryCovariatesAnchored`](@ref)) is fit with an
 [`AnchoredData`](@ref) wrapping a [`CovariateData`](@ref) and supports all three
-methods.
+methods. Anchors in an [`AnchoredData`](@ref) may target a single item or the average
+over a group of items (variance `σ²/n_g` for a group of size `n_g`).
 """
 function fit end
 

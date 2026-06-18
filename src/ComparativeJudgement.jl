@@ -25,6 +25,7 @@ include("interface.jl")
 include("utils.jl")
 include("polya_gamma.jl")
 include("models/bradley_terry.jl")
+include("models/bradley_terry_anchored.jl")
 include("models/bradley_terry_covariates.jl")
 include("models/bradley_terry_covariates_anchored.jl")
 

@@ -1,7 +1,7 @@
 # Anchored covariate Bradley–Terry models
 
 The [covariate model](covariate_bt.md) explains item strengths with covariates
-(``\lambda_i = z_i^\top\beta``); the [anchored model](bradley_terry.md) calibrates
+(``\lambda_i = z_i^\top\beta``); the [anchored model](anchored_bt.md) calibrates
 the latent scale to real measurements (``y = a + b\lambda + \varepsilon``). Their
 combination — `Anchored{Covariates{BradleyTerry}}`, aliased
 [`BradleyTerryCovariatesAnchored`](@ref) — does **both at once**:
@@ -247,4 +247,38 @@ Priors can be controlled individually by passing a full
 [`AnchoredCovariatePrior`](@ref) (a ``\beta`` prior plus the calibration and variance
 priors); passing a bare ``\beta`` prior, as above, wraps it with weakly-informative
 defaults.
+
+## Group-averaged anchors
+
+An anchor measurement may apply to a *group* of items rather than one — for example
+the mean exam mark of a batch of scripts. Pass label-groups instead of labels: the
+anchor is then the group-mean strength,
+
+```math
+y_g = a + b\,\operatorname{mean}_{i\in G_g}(z_i^\top\beta) + \varepsilon_g,
+\qquad \varepsilon_g \sim N(0,\,\sigma^2/n_g),\quad n_g = |G_g|,
+```
+
+with larger groups treated as more precise. Internally this just averages the
+covariates within each group (``\bar z_g = \operatorname{mean}_{i\in G_g} z_i``), so
+MLE, Bayesian inference and selection all carry over unchanged. We split the 60 items
+into 15 batches of 4 and measure each batch's mean:
+
+```@example cova
+batches = [collect(g) for g in Iterators.partition(1:K, 4)]   # 15 groups of 4
+batch_labels = [labels[g] for g in batches]
+batch_y = [a_true + b_true * sum(λ_true[g]) / length(g) for g in batches] .+
+          [σ_true / sqrt(length(g)) for g in batches] .* randn(rng, length(batches))
+
+gdata = AnchoredData(cd, batch_labels, batch_y)
+gfit = fit(BradleyTerryCovariatesAnchored(), MLE(), gdata)
+(coefficients = coefficients(gfit), calibration = calibration(gfit))
+```
+
+The coefficients and calibration are recovered from group averages alone, and
+predicting a brand-new item from its covariates works just as before:
+
+```@example cova
+predict(gfit, z_new)
+```
 
