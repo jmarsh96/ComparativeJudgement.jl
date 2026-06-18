@@ -229,6 +229,22 @@ function coefficients(fitted::FittedComparativeModel{M, I, CovariateMLEResult}) 
     return (; (r.names[r.selected] .=> r.β)...)
 end
 
+function coefficient_std(fitted::FittedComparativeModel{M, I, CovariateMLEResult}) where {M <: Covariates, I}
+    r = fitted.result
+    se = [sqrt(r.vcov[k, k]) for k in 1:length(r.β)]
+    return (; (r.names[r.selected] .=> se)...)
+end
+
+function coefficient_intervals(fitted::FittedComparativeModel{M, I, CovariateMLEResult};
+                               level::Float64=0.95) where {M <: Covariates, I}
+    0.0 < level < 1.0 || throw(ArgumentError("level must be in (0, 1), got $level"))
+    r = fitted.result
+    z = _norm_quantile(1.0 - (1.0 - level) / 2.0)
+    ints = [(r.β[k] - z * sqrt(r.vcov[k, k]), r.β[k] + z * sqrt(r.vcov[k, k]))
+            for k in 1:length(r.β)]
+    return (; (r.names[r.selected] .=> ints)...)
+end
+
 function loglikelihood(fitted::FittedComparativeModel{M, I, CovariateMLEResult}) where {M <: Covariates, I}
     return fitted.result.loglik
 end
@@ -455,6 +471,22 @@ function coefficients(fitted::FittedComparativeModel{M, Bayesian, CovariateMCMCS
     r = fitted.result
     β̄ = vec(mean(r.β_samples, dims=1))
     return (; (r.names .=> β̄)...)
+end
+
+function coefficient_std(fitted::FittedComparativeModel{M, Bayesian, CovariateMCMCSamples}) where {M <: Covariates}
+    r = fitted.result
+    sd = vec(std(r.β_samples, dims=1))
+    return (; (r.names .=> sd)...)
+end
+
+function coefficient_intervals(fitted::FittedComparativeModel{M, Bayesian, CovariateMCMCSamples};
+                               level::Float64=0.95) where {M <: Covariates}
+    0.0 < level < 1.0 || throw(ArgumentError("level must be in (0, 1), got $level"))
+    r = fitted.result
+    α = (1.0 - level) / 2.0
+    ints = [(quantile(r.β_samples[:, k], α), quantile(r.β_samples[:, k], 1.0 - α))
+            for k in 1:size(r.β_samples, 2)]
+    return (; (r.names .=> ints)...)
 end
 
 """

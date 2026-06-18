@@ -51,6 +51,26 @@ covariate name. Point estimates for [`MLE`](@ref)/[`StepwiseMLE`](@ref) fits
 function coefficients end
 
 """
+    coefficient_std(fitted)
+
+Uncertainty of the covariate coefficients β of a [`Covariates`](@ref) fit, keyed
+by covariate name: standard errors (from the inverse Fisher information) for
+[`MLE`](@ref)/[`StepwiseMLE`](@ref) fits, posterior standard deviations for
+[`Bayesian`](@ref) fits.
+"""
+function coefficient_std end
+
+"""
+    coefficient_intervals(fitted; level=0.95)
+
+Interval estimates for the covariate coefficients β of a [`Covariates`](@ref)
+fit, as a named tuple of `(lo, hi)` keyed by covariate name. These are Wald
+confidence intervals `β̂ ± z·SE` for [`MLE`](@ref)/[`StepwiseMLE`](@ref) fits and
+posterior credible intervals for [`Bayesian`](@ref) fits.
+"""
+function coefficient_intervals end
+
+"""
     inclusion_probabilities(fitted)
 
 Posterior inclusion probabilities per covariate from a [`Bayesian`](@ref)

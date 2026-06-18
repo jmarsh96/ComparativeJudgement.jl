@@ -15,7 +15,7 @@ export AbstractPrior, NormalPrior, InverseGammaPrior, AnchoredPrior
 export HorseshoePrior, SpikeSlabPrior
 export BTMCMCSamples, AnchoredMCMCSamples, CovariateMLEResult, CovariateMCMCSamples
 export fit, loglikelihood, probability, predict, calibration, strengths
-export coefficients, inclusion_probabilities
+export coefficients, coefficient_std, coefficient_intervals, inclusion_probabilities
 export posterior_mean, posterior_std, credible_interval
 
 include("types.jl")

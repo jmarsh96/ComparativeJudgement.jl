@@ -450,6 +450,51 @@ using LinearAlgebra: diag
         @test 0.0 < probability(f, 1, 2) < 1.0
     end
 
+    @testset "Coefficient uncertainty" begin
+        # normal quantile helper agrees with known z-values
+        @test ComparativeJudgement._norm_quantile(0.975) ≈ 1.959963985 atol=1e-6
+        @test ComparativeJudgement._norm_quantile(0.5) ≈ 0.0 atol=1e-9
+        @test ComparativeJudgement._norm_quantile(0.95) ≈ 1.644853627 atol=1e-6
+
+        rng = MersenneTwister(2718)
+        βtrue = [1.6, -1.2, 0.0]
+        cd, _ = _simulate_covariate_data(rng, 45, βtrue; n_per_pair=12)
+
+        # MLE: Wald confidence intervals from the Fisher information
+        f = fit(BradleyTerryCovariates(), MLE(), cd)
+        se = coefficient_std(f)
+        ci = coefficient_intervals(f; level=0.95)
+        @test keys(se) == (:x1, :x2, :x3)
+        @test all(values(se) .> 0)
+        β̂ = coefficients(f)
+        for k in keys(ci)
+            lo, hi = ci[k]
+            @test lo < β̂[k] < hi                       # estimate inside its interval
+        end
+        @test ci.x1[1] > 0 && ci.x2[2] < 0             # signal CIs exclude zero
+        @test ci.x3[1] < 0 < ci.x3[2]                  # null CI covers zero
+        # wider level ⇒ wider interval
+        ci99 = coefficient_intervals(f; level=0.99)
+        @test (ci99.x1[2] - ci99.x1[1]) > (ci.x1[2] - ci.x1[1])
+        @test_throws ArgumentError coefficient_intervals(f; level=1.5)
+
+        # Bayesian: posterior credible intervals
+        fb = fit(BradleyTerryCovariates(), Bayesian(n_samples=800, n_burnin=300),
+                 cd; rng=MersenneTwister(11))
+        cib = coefficient_intervals(fb; level=0.9)
+        sdb = coefficient_std(fb)
+        @test all(values(sdb) .> 0)
+        for k in keys(cib)
+            lo, hi = cib[k]
+            @test lo < coefficients(fb)[k] < hi
+        end
+        @test cib.x1[1] > 0 && cib.x2[2] < 0           # signal credible intervals exclude zero
+
+        # selection carries through: intervals only for retained covariates
+        fs = fit(BradleyTerryCovariates(), StepwiseMLE(criterion=:BIC), cd)
+        @test keys(coefficient_intervals(fs)) == keys(coefficients(fs))
+    end
+
     @testset "Horseshoe shrinks null coefficients" begin
         rng = MersenneTwister(123)
         βtrue = [2.0, 0.0, 0.0, 0.0]    # one signal, three null
