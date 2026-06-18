@@ -1,7 +1,8 @@
 using ComparativeJudgement
 using Test
 using Random: MersenneTwister, rand
-using Statistics: mean, var
+using Statistics: mean, var, cor
+using LinearAlgebra: diag
 
 @testset "ComparativeJudgement.jl" begin
 
@@ -358,6 +359,145 @@ using Statistics: mean, var
         fitted2 = fit(BradleyTerryAnchored(), Bayesian(n_samples=100, n_burnin=50),
                       data, prior; rng=rng)
         @test fitted2.converged
+    end
+
+    # Simulate covariate Bradley-Terry data: λ_i = z_iᵀβ.
+    function _simulate_covariate_data(rng, K, βtrue; n_per_pair=6)
+        p = length(βtrue)
+        Z = randn(rng, K, p)
+        λ = Z * βtrue
+        wins = zeros(Int, K, K)
+        for i in 1:K, j in (i + 1):K
+            pij = 1.0 / (1.0 + exp(-(λ[i] - λ[j])))
+            for _ in 1:n_per_pair
+                rand(rng) < pij ? (wins[i, j] += 1) : (wins[j, i] += 1)
+            end
+        end
+        labels = ["item$i" for i in 1:K]
+        return CovariateData(PairwiseData(wins, labels), Z), λ
+    end
+
+    @testset "CovariateData construction" begin
+        wins = [0 3 1; 2 0 4; 5 1 0]
+        data = PairwiseData(wins, ["A", "B", "C"])
+        Z = [1.0 0.0; 0.5 1.0; -1.0 2.0]
+
+        cd = CovariateData(data, Z, [:x, :y])
+        @test size(cd.Z) == (3, 2)
+        @test cd.names == [:x, :y]
+        @test CovariateData(data, Z).names == [:x1, :x2]          # auto names
+        @test CovariateData(data, :x => Z[:, 1], :y => Z[:, 2]).Z == Z  # pairs ctor
+
+        @test_throws DimensionMismatch CovariateData(data, Z, [:only_one])
+        @test_throws DimensionMismatch CovariateData(data, randn(2, 2), [:a, :b])
+        # constant column is not identifiable
+        @test_throws ArgumentError CovariateData(data, [1.0 1.0; 1.0 0.0; 1.0 2.0], [:const, :ok])
+    end
+
+    @testset "Covariate BradleyTerry MLE recovery" begin
+        rng = MersenneTwister(2024)
+        βtrue = [1.5, -1.0, 0.0]
+        cd, λtrue = _simulate_covariate_data(rng, 40, βtrue; n_per_pair=10)
+
+        f = fit(BradleyTerryCovariates(), MLE(), cd)
+        @test f.converged
+        β̂ = collect(values(coefficients(f)))
+        @test isapprox(β̂, βtrue; atol=0.4)
+
+        # strengths are λ = Zβ, centred to sum to zero
+        λ̂ = strengths(f)
+        @test sum(λ̂) ≈ 0.0 atol=1e-8
+        @test cor(λ̂, λtrue) > 0.95
+
+        # default-method overload + label/index probability agree
+        @test fit(BradleyTerryCovariates(), cd).converged
+        @test probability(f, "item1", "item2") ≈ probability(f, 1, 2)
+        @test 0.0 < probability(f, 1, 2) < 1.0
+        @test_throws ArgumentError probability(f, "item1", "nope")
+
+        # coefficient covariance is a sensible p×p PSD matrix
+        @test size(f.result.vcov) == (3, 3)
+        @test all(diag(f.result.vcov) .> 0)
+    end
+
+    @testset "Covariate one-hot reproduces plain BradleyTerry" begin
+        rng = MersenneTwister(7)
+        wins = [0 9 6; 3 0 8; 4 5 0]
+        data = PairwiseData(wins, ["A", "B", "C"])
+        # One-hot covariates for items 2,3 (item 1 is the reference / dropped level)
+        Z = [0.0 0.0; 1.0 0.0; 0.0 1.0]
+        cd = CovariateData(data, Z, [:I2, :I3])
+
+        fcov = fit(BradleyTerryCovariates(), MLE(), cd)
+        fbt = fit(BradleyTerry(), MLE(), data)
+        @test isapprox(strengths(fcov), strengths(fbt); atol=1e-5)
+    end
+
+    @testset "Covariate BradleyTerry Bayesian (Normal)" begin
+        rng = MersenneTwister(99)
+        βtrue = [1.2, -0.8]
+        cd, _ = _simulate_covariate_data(rng, 35, βtrue; n_per_pair=10)
+
+        f = fit(BradleyTerryCovariates(), Bayesian(n_samples=800, n_burnin=300),
+                cd; rng=MersenneTwister(1))
+        β̂ = collect(values(coefficients(f)))
+        @test isapprox(β̂, βtrue; atol=0.4)
+        @test length(strengths(f)) == 35
+        @test length(posterior_std(f)) == 35
+        lo, hi = credible_interval(f, 1)
+        @test lo < hi
+        @test loglikelihood(f) isa Vector{Float64}
+        @test 0.0 < probability(f, 1, 2) < 1.0
+    end
+
+    @testset "Horseshoe shrinks null coefficients" begin
+        rng = MersenneTwister(123)
+        βtrue = [2.0, 0.0, 0.0, 0.0]    # one signal, three null
+        cd, _ = _simulate_covariate_data(rng, 45, βtrue; n_per_pair=10)
+
+        f = fit(BradleyTerryCovariates(), Bayesian(n_samples=800, n_burnin=400),
+                cd, HorseshoePrior(); rng=MersenneTwister(5))
+        β̂ = collect(values(coefficients(f)))
+        @test abs(β̂[1]) > 1.0                       # signal survives
+        @test all(abs.(β̂[2:4]) .< 0.4)              # nulls shrunk toward zero
+        @test abs(β̂[1]) > maximum(abs.(β̂[2:4]))
+    end
+
+    @testset "Spike-and-slab inclusion probabilities" begin
+        rng = MersenneTwister(321)
+        βtrue = [2.0, -2.0, 0.0, 0.0]
+        cd, _ = _simulate_covariate_data(rng, 45, βtrue; n_per_pair=10)
+
+        f = fit(BradleyTerryCovariates(), Bayesian(n_samples=800, n_burnin=400),
+                cd, SpikeSlabPrior(); rng=MersenneTwister(6))
+        pip = collect(values(inclusion_probabilities(f)))
+        @test pip[1] > 0.8 && pip[2] > 0.8          # true covariates included
+        @test pip[3] < 0.5 && pip[4] < 0.5          # null covariates mostly excluded
+
+        # inclusion probabilities require a spike-slab fit
+        fn = fit(BradleyTerryCovariates(), Bayesian(n_samples=100, n_burnin=50),
+                 cd; rng=MersenneTwister(6))
+        @test_throws ArgumentError inclusion_probabilities(fn)
+    end
+
+    @testset "Stepwise MLE selection" begin
+        rng = MersenneTwister(555)
+        βtrue = [1.8, -1.5, 0.0, 0.0, 0.0]
+        cd, _ = _simulate_covariate_data(rng, 50, βtrue; n_per_pair=12)
+
+        f = fit(BradleyTerryCovariates(), StepwiseMLE(direction=:both, criterion=:BIC), cd)
+        @test sort(f.result.selected) == [1, 2]     # picks the two real covariates
+        @test length(coefficients(f)) == 2
+        @test !isempty(f.result.trace)
+
+        # forward and backward also reach the right subset here
+        ff = fit(BradleyTerryCovariates(), StepwiseMLE(direction=:forward, criterion=:BIC), cd)
+        fb = fit(BradleyTerryCovariates(), StepwiseMLE(direction=:backward, criterion=:BIC), cd)
+        @test sort(ff.result.selected) == [1, 2]
+        @test sort(fb.result.selected) == [1, 2]
+
+        @test_throws ArgumentError StepwiseMLE(direction=:sideways)
+        @test_throws ArgumentError StepwiseMLE(criterion=:WAIC)
     end
 
 end

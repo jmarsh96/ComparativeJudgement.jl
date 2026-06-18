@@ -275,3 +275,179 @@ struct FittedComparativeModel{M <: AbstractComparativeModel, I <: InferenceMetho
     converged::Bool
     iterations::Int
 end
+
+# ─────────────────────────── Covariate models ────────────────────────────
+#
+# A covariate model parameterises the latent strengths as a linear combination
+# of item-level covariates: λ_i = z_iᵀβ, so that
+# `logit P(i beats j) = (z_i − z_j)ᵀβ`. Estimation targets the coefficient
+# vector β ∈ ℝ^p instead of the K free strengths; λ is recovered as Z·β.
+
+"""
+    Covariates(model)
+
+Wrapper parameterising a comparative `model`'s latent strengths as a linear
+combination of item covariates, `λ_i = z_iᵀβ`. Fit with a [`CovariateData`](@ref)
+wrapping the comparison data and the item covariate matrix, e.g.
+
+```julia
+fit(BradleyTerryCovariates(), MLE(), CovariateData(data, Z, [:age, :size]))
+```
+
+See also [`BradleyTerryCovariates`](@ref).
+"""
+struct Covariates{M <: AbstractComparativeModel} <: AbstractComparativeModel
+    model::M
+end
+
+"""
+    BradleyTerryCovariates()
+
+Alias for `Covariates(BradleyTerry())`: the Bradley–Terry model whose latent
+strengths are a linear function of item covariates, `λ_i = z_iᵀβ`, so that
+`logit P(i beats j) = (z_i − z_j)ᵀβ`. See [`Covariates`](@ref) and [`fit`](@ref).
+"""
+const BradleyTerryCovariates = Covariates{BradleyTerry}
+BradleyTerryCovariates() = Covariates(BradleyTerry())
+
+"""
+    StepwiseMLE(; direction=:both, criterion=:AIC)
+
+Stepwise maximum-likelihood variable selection for a [`Covariates`](@ref)
+model. `direction` is `:forward`, `:backward`, or `:both`; `criterion` is `:AIC`
+or `:BIC`. Greedily adds/removes covariates to optimise the information
+criterion, then refits the selected subset. The result records the selected
+covariate indices and the selection trace; query it with the usual accessors
+([`coefficients`](@ref), [`strengths`](@ref)).
+"""
+struct StepwiseMLE <: InferenceMethod
+    direction::Symbol
+    criterion::Symbol
+    function StepwiseMLE(; direction::Symbol=:both, criterion::Symbol=:AIC)
+        direction in (:forward, :backward, :both) || throw(ArgumentError(
+            "direction must be :forward, :backward or :both, got $direction"))
+        criterion in (:AIC, :BIC) || throw(ArgumentError(
+            "criterion must be :AIC or :BIC, got $criterion"))
+        new(direction, criterion)
+    end
+end
+
+"""
+    HorseshoePrior(; τ₀=1.0)
+
+Horseshoe (global-local) shrinkage prior on the covariate coefficients β for a
+[`Bayesian`](@ref) [`Covariates`](@ref) fit. Each coefficient has its own local
+scale and shares a global scale `τ` (hyperprior scale `τ₀`), strongly shrinking
+small coefficients while leaving large ones almost unpenalised. Implemented with
+the inverse-gamma auxiliary representation of Makalic & Schmidt (2016).
+"""
+struct HorseshoePrior <: AbstractPrior
+    τ₀::Float64
+    function HorseshoePrior(; τ₀::Real=1.0)
+        τ₀ > 0 || throw(ArgumentError("τ₀ must be positive, got $τ₀"))
+        new(Float64(τ₀))
+    end
+end
+
+"""
+    SpikeSlabPrior(; v_slab=10.0, v_spike=0.01, π₀=0.5)
+
+Continuous spike-and-slab (SSVS) prior on the covariate coefficients β for a
+[`Bayesian`](@ref) [`Covariates`](@ref) fit. Each coefficient is drawn from a
+wide "slab" `N(0, v_slab)` when included or a narrow "spike" `N(0, v_spike)`
+when excluded, with prior inclusion probability `π₀`. Yields posterior
+inclusion probabilities per covariate ([`inclusion_probabilities`](@ref)).
+"""
+struct SpikeSlabPrior <: AbstractPrior
+    v_slab::Float64
+    v_spike::Float64
+    π₀::Float64
+    function SpikeSlabPrior(; v_slab::Real=10.0, v_spike::Real=0.01, π₀::Real=0.5)
+        v_slab > 0 || throw(ArgumentError("v_slab must be positive, got $v_slab"))
+        v_spike > 0 || throw(ArgumentError("v_spike must be positive, got $v_spike"))
+        v_slab > v_spike || throw(ArgumentError(
+            "v_slab ($v_slab) must exceed v_spike ($v_spike)"))
+        0 < π₀ < 1 || throw(ArgumentError("π₀ must be in (0, 1), got $π₀"))
+        new(Float64(v_slab), Float64(v_spike), Float64(π₀))
+    end
+end
+
+"""
+    CovariateData(data, Z, names)
+    CovariateData(data, Z)
+    CovariateData(data, name => values, ...)
+
+Comparison `data` augmented with an item covariate matrix `Z` (`K × p`, one row
+per item in the order of `data.labels`) and covariate `names`. Used to fit
+[`Covariates`](@ref) models, where `λ_i = z_iᵀβ`.
+
+An overall intercept (a covariate constant across items) is **not** identifiable:
+it cancels in the differences `z_i − z_j`, so such columns are rejected.
+"""
+struct CovariateData{L}
+    data::PairwiseData{L}
+    Z::Matrix{Float64}
+    names::Vector{Symbol}
+    function CovariateData(data::PairwiseData{L}, Z::AbstractMatrix,
+                           names::Vector{Symbol}) where {L}
+        K = length(data.labels)
+        size(Z, 1) == K || throw(DimensionMismatch(
+            "Z must have $K rows to match $K items, got $(size(Z, 1))"))
+        size(Z, 2) == length(names) || throw(DimensionMismatch(
+            "Z has $(size(Z, 2)) columns but $(length(names)) names given"))
+        Zf = Matrix{Float64}(Z)
+        for c in 1:size(Zf, 2)
+            col = @view Zf[:, c]
+            all(==(col[1]), col) && throw(ArgumentError(
+                "Covariate $(names[c]) is constant across items; it cancels in " *
+                "the comparison differences and is not identifiable. Drop it."))
+        end
+        new{L}(data, Zf, names)
+    end
+end
+function CovariateData(data::PairwiseData, Z::AbstractMatrix)
+    names = [Symbol("x", c) for c in 1:size(Z, 2)]
+    return CovariateData(data, Z, names)
+end
+function CovariateData(data::PairwiseData, cols::Pair{Symbol, <:AbstractVector}...)
+    names = Symbol[c.first for c in cols]
+    Z = reduce(hcat, [Vector{Float64}(c.second) for c in cols])
+    return CovariateData(data, Z, names)
+end
+
+"""
+    CovariateMLEResult
+
+Result of an [`MLE`](@ref) or [`StepwiseMLE`](@ref) [`Covariates`](@ref) fit:
+the coefficient estimates `β`, their covariance `vcov`, the log-likelihood, the
+item covariate matrix `Z`, covariate `names`, the indices of covariates retained
+in the model (`selected`), and the selection `trace` (empty for plain MLE).
+"""
+struct CovariateMLEResult
+    β::Vector{Float64}
+    vcov::Matrix{Float64}
+    loglik::Float64
+    Z::Matrix{Float64}
+    names::Vector{Symbol}
+    selected::Vector{Int}
+    trace::Vector{NamedTuple}
+end
+
+"""
+    CovariateMCMCSamples
+
+Posterior draws from a [`Bayesian`](@ref) [`Covariates`](@ref) fit: the
+`n_samples × p` matrix of coefficient draws `β_samples`, the per-draw
+log-likelihoods, the item covariate matrix `Z`, covariate `names`, and (for
+[`SpikeSlabPrior`](@ref) only) the `inclusion` indicator draws.
+"""
+struct CovariateMCMCSamples
+    β_samples::Matrix{Float64}        # n_samples × p
+    loglikelihoods::Vector{Float64}
+    inclusion::Union{Nothing, Matrix{Float64}}  # n_samples × p, spike-slab only
+    Z::Matrix{Float64}
+    names::Vector{Symbol}
+    n_samples::Int
+    n_burnin::Int
+    thin::Int
+end

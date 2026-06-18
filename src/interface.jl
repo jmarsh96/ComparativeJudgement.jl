@@ -42,6 +42,24 @@ for [`Bayesian`](@ref) fits this is the posterior mean, equivalent to
 function strengths end
 
 """
+    coefficients(fitted)
+
+Estimated covariate coefficients β of a [`Covariates`](@ref) fit, keyed by
+covariate name. Point estimates for [`MLE`](@ref)/[`StepwiseMLE`](@ref) fits
+(selected covariates only); posterior means for [`Bayesian`](@ref) fits.
+"""
+function coefficients end
+
+"""
+    inclusion_probabilities(fitted)
+
+Posterior inclusion probabilities per covariate from a [`Bayesian`](@ref)
+[`Covariates`](@ref) fit with a [`SpikeSlabPrior`](@ref), keyed by covariate
+name.
+"""
+function inclusion_probabilities end
+
+"""
     posterior_mean(fitted)
 
 Posterior mean of the latent strengths λ of a [`Bayesian`](@ref) fit, one per

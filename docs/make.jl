@@ -17,6 +17,7 @@ makedocs(;
     pages=[
         "Home" => "index.md",
         "Bradley–Terry models" => "bradley_terry.md",
+        "Covariate models" => "covariate_bt.md",
         "API reference" => "api.md",
     ],
 )
