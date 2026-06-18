@@ -1,6 +1,6 @@
 name = "ComparativeJudgement"
 uuid = "8b2cd0c5-0b38-4f62-b1bf-56047c74b2ce"
-version = "1.1.0-DEV"
+version = "1.2.0-DEV"
 authors = ["Joseph Marsh"]
 
 [deps]
