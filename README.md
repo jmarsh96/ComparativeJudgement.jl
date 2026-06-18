@@ -56,7 +56,10 @@ Z = [0.0 1.0;                         # one row of covariates per item
      2.0 1.0]
 cd = CovariateData(data, Z, [:size, :age])
 
-fit(BradleyTerryCovariates(), MLE(), cd)                        # ML coefficients
+cfit = fit(BradleyTerryCovariates(), MLE(), cd)                 # ML coefficients
+coefficients(cfit)                                              # point estimates β
+coefficient_intervals(cfit; level=0.95)                        # confidence intervals
+
 fit(BradleyTerryCovariates(), StepwiseMLE(criterion=:BIC), cd)  # stepwise selection
 fit(BradleyTerryCovariates(), Bayesian(), cd, HorseshoePrior()) # shrinkage
 fit(BradleyTerryCovariates(), Bayesian(), cd, SpikeSlabPrior()) # selection + PIPs
