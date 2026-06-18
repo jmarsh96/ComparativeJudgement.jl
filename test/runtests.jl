@@ -1,7 +1,8 @@
 using ComparativeJudgement
 using Test
 using Random: MersenneTwister, rand
-using Statistics: mean, var
+using Statistics: mean, var, cor
+using LinearAlgebra: diag, dot
 
 @testset "ComparativeJudgement.jl" begin
 
@@ -233,17 +234,47 @@ using Statistics: mean, var
         pdata = PairwiseData(wins, ["A", "B", "C"])
 
         data = AnchoredData(pdata, ["A", "C"], [1.0, 5.0])
-        @test data.anchor_idx == [1, 3]
+        @test data.anchor_groups == [[1], [3]]      # single-item anchors → size-1 groups
         @test data.anchor_values == [1.0, 5.0]
 
         ddata = AnchoredData(pdata, Dict("B" => 3))
-        @test ddata.anchor_idx == [2]
+        @test ddata.anchor_groups == [[2]]
         @test ddata.anchor_values == [3.0]
 
         @test_throws ArgumentError AnchoredData(pdata, ["A", "D"], [1.0, 2.0])
         @test_throws DimensionMismatch AnchoredData(pdata, ["A"], [1.0, 2.0])
         @test_throws ArgumentError AnchoredData(pdata, ["A", "A"], [1.0, 2.0])
         @test_throws ArgumentError AnchoredData(pdata, String[], Float64[])
+    end
+
+    @testset "AnchoredData — group anchors" begin
+        wins = [0 3 1 2; 1 0 2 1; 2 1 0 3; 1 2 1 0]
+        pdata = PairwiseData(wins, ["A", "B", "C", "D"])
+
+        # Group anchors: each measurement averages a group of items.
+        gdata = AnchoredData(pdata, [["A", "B"], ["C", "D"]], [1.0, 5.0])
+        @test gdata isa AnchoredData{PairwiseData{String}, String}
+        @test gdata.anchor_groups == [[1, 2], [3, 4]]
+        @test gdata.anchor_values == [1.0, 5.0]
+
+        # Mixed single + group anchors, and an item shared across groups.
+        mdata = AnchoredData(pdata, [["A"], ["B", "C", "D"], ["A", "D"]], [1.0, 2.0, 3.0])
+        @test mdata.anchor_groups == [[1], [2, 3, 4], [1, 4]]
+
+        # Pairs convenience constructor.
+        pdata2 = AnchoredData(pdata, ["A", "B"] => 1.0, ["C"] => 4.0)
+        @test pdata2.anchor_groups == [[1, 2], [3]]
+        @test pdata2.anchor_values == [1.0, 4.0]
+
+        # Single-label and group constructors dispatch as expected.
+        @test AnchoredData(pdata, ["A", "C"], [1.0, 2.0]).anchor_groups == [[1], [3]]
+
+        # Validation.
+        @test_throws ArgumentError AnchoredData(pdata, [["A", "Z"]], [1.0])      # unknown label
+        @test_throws ArgumentError AnchoredData(pdata, [["A", "A"]], [1.0])      # dup within group
+        @test_throws ArgumentError AnchoredData(pdata, [String[]], [1.0])        # empty group
+        @test_throws DimensionMismatch AnchoredData(pdata, [["A"], ["B"]], [1.0])
+        @test_throws ArgumentError AnchoredData(pdata, Vector{String}[], Float64[])
     end
 
     @testset "Gamma sampler — moments" begin
@@ -358,6 +389,414 @@ using Statistics: mean, var
         fitted2 = fit(BradleyTerryAnchored(), Bayesian(n_samples=100, n_burnin=50),
                       data, prior; rng=rng)
         @test fitted2.converged
+    end
+
+    # Simulate covariate Bradley-Terry data: λ_i = z_iᵀβ.
+    function _simulate_covariate_data(rng, K, βtrue; n_per_pair=6)
+        p = length(βtrue)
+        Z = randn(rng, K, p)
+        λ = Z * βtrue
+        wins = zeros(Int, K, K)
+        for i in 1:K, j in (i + 1):K
+            pij = 1.0 / (1.0 + exp(-(λ[i] - λ[j])))
+            for _ in 1:n_per_pair
+                rand(rng) < pij ? (wins[i, j] += 1) : (wins[j, i] += 1)
+            end
+        end
+        labels = ["item$i" for i in 1:K]
+        return CovariateData(PairwiseData(wins, labels), Z), λ
+    end
+
+    @testset "CovariateData construction" begin
+        wins = [0 3 1; 2 0 4; 5 1 0]
+        data = PairwiseData(wins, ["A", "B", "C"])
+        Z = [1.0 0.0; 0.5 1.0; -1.0 2.0]
+
+        cd = CovariateData(data, Z, [:x, :y])
+        @test size(cd.Z) == (3, 2)
+        @test cd.names == [:x, :y]
+        @test CovariateData(data, Z).names == [:x1, :x2]          # auto names
+        @test CovariateData(data, :x => Z[:, 1], :y => Z[:, 2]).Z == Z  # pairs ctor
+
+        @test_throws DimensionMismatch CovariateData(data, Z, [:only_one])
+        @test_throws DimensionMismatch CovariateData(data, randn(2, 2), [:a, :b])
+        # constant column is not identifiable
+        @test_throws ArgumentError CovariateData(data, [1.0 1.0; 1.0 0.0; 1.0 2.0], [:const, :ok])
+    end
+
+    @testset "Covariate BradleyTerry MLE recovery" begin
+        rng = MersenneTwister(2024)
+        βtrue = [1.5, -1.0, 0.0]
+        cd, λtrue = _simulate_covariate_data(rng, 40, βtrue; n_per_pair=10)
+
+        f = fit(BradleyTerryCovariates(), MLE(), cd)
+        @test f.converged
+        β̂ = collect(values(coefficients(f)))
+        @test isapprox(β̂, βtrue; atol=0.4)
+
+        # strengths are λ = Zβ, centred to sum to zero
+        λ̂ = strengths(f)
+        @test sum(λ̂) ≈ 0.0 atol=1e-8
+        @test cor(λ̂, λtrue) > 0.95
+
+        # default-method overload + label/index probability agree
+        @test fit(BradleyTerryCovariates(), cd).converged
+        @test probability(f, "item1", "item2") ≈ probability(f, 1, 2)
+        @test 0.0 < probability(f, 1, 2) < 1.0
+        @test_throws ArgumentError probability(f, "item1", "nope")
+
+        # coefficient covariance is a sensible p×p PSD matrix
+        @test size(f.result.vcov) == (3, 3)
+        @test all(diag(f.result.vcov) .> 0)
+    end
+
+    @testset "Covariate one-hot reproduces plain BradleyTerry" begin
+        rng = MersenneTwister(7)
+        wins = [0 9 6; 3 0 8; 4 5 0]
+        data = PairwiseData(wins, ["A", "B", "C"])
+        # One-hot covariates for items 2,3 (item 1 is the reference / dropped level)
+        Z = [0.0 0.0; 1.0 0.0; 0.0 1.0]
+        cd = CovariateData(data, Z, [:I2, :I3])
+
+        fcov = fit(BradleyTerryCovariates(), MLE(), cd)
+        fbt = fit(BradleyTerry(), MLE(), data)
+        @test isapprox(strengths(fcov), strengths(fbt); atol=1e-5)
+    end
+
+    @testset "Covariate BradleyTerry Bayesian (Normal)" begin
+        rng = MersenneTwister(99)
+        βtrue = [1.2, -0.8]
+        cd, _ = _simulate_covariate_data(rng, 35, βtrue; n_per_pair=10)
+
+        f = fit(BradleyTerryCovariates(), Bayesian(n_samples=800, n_burnin=300),
+                cd; rng=MersenneTwister(1))
+        β̂ = collect(values(coefficients(f)))
+        @test isapprox(β̂, βtrue; atol=0.4)
+        @test length(strengths(f)) == 35
+        @test length(posterior_std(f)) == 35
+        lo, hi = credible_interval(f, 1)
+        @test lo < hi
+        @test loglikelihood(f) isa Vector{Float64}
+        @test 0.0 < probability(f, 1, 2) < 1.0
+    end
+
+    @testset "Coefficient uncertainty" begin
+        # normal quantile helper agrees with known z-values
+        @test ComparativeJudgement._norm_quantile(0.975) ≈ 1.959963985 atol=1e-6
+        @test ComparativeJudgement._norm_quantile(0.5) ≈ 0.0 atol=1e-9
+        @test ComparativeJudgement._norm_quantile(0.95) ≈ 1.644853627 atol=1e-6
+
+        rng = MersenneTwister(2718)
+        βtrue = [1.6, -1.2, 0.0]
+        cd, _ = _simulate_covariate_data(rng, 45, βtrue; n_per_pair=12)
+
+        # MLE: Wald confidence intervals from the Fisher information
+        f = fit(BradleyTerryCovariates(), MLE(), cd)
+        se = coefficient_std(f)
+        ci = coefficient_intervals(f; level=0.95)
+        @test keys(se) == (:x1, :x2, :x3)
+        @test all(values(se) .> 0)
+        β̂ = coefficients(f)
+        for k in keys(ci)
+            lo, hi = ci[k]
+            @test lo < β̂[k] < hi                       # estimate inside its interval
+        end
+        @test ci.x1[1] > 0 && ci.x2[2] < 0             # signal CIs exclude zero
+        @test ci.x3[1] < 0 < ci.x3[2]                  # null CI covers zero
+        # wider level ⇒ wider interval
+        ci99 = coefficient_intervals(f; level=0.99)
+        @test (ci99.x1[2] - ci99.x1[1]) > (ci.x1[2] - ci.x1[1])
+        @test_throws ArgumentError coefficient_intervals(f; level=1.5)
+
+        # Bayesian: posterior credible intervals
+        fb = fit(BradleyTerryCovariates(), Bayesian(n_samples=800, n_burnin=300),
+                 cd; rng=MersenneTwister(11))
+        cib = coefficient_intervals(fb; level=0.9)
+        sdb = coefficient_std(fb)
+        @test all(values(sdb) .> 0)
+        for k in keys(cib)
+            lo, hi = cib[k]
+            @test lo < coefficients(fb)[k] < hi
+        end
+        @test cib.x1[1] > 0 && cib.x2[2] < 0           # signal credible intervals exclude zero
+
+        # selection carries through: intervals only for retained covariates
+        fs = fit(BradleyTerryCovariates(), StepwiseMLE(criterion=:BIC), cd)
+        @test keys(coefficient_intervals(fs)) == keys(coefficients(fs))
+    end
+
+    @testset "Horseshoe shrinks null coefficients" begin
+        rng = MersenneTwister(123)
+        βtrue = [2.0, 0.0, 0.0, 0.0]    # one signal, three null
+        cd, _ = _simulate_covariate_data(rng, 45, βtrue; n_per_pair=10)
+
+        f = fit(BradleyTerryCovariates(), Bayesian(n_samples=800, n_burnin=400),
+                cd, HorseshoePrior(); rng=MersenneTwister(5))
+        β̂ = collect(values(coefficients(f)))
+        @test abs(β̂[1]) > 1.0                       # signal survives
+        @test all(abs.(β̂[2:4]) .< 0.4)              # nulls shrunk toward zero
+        @test abs(β̂[1]) > maximum(abs.(β̂[2:4]))
+    end
+
+    @testset "Spike-and-slab inclusion probabilities" begin
+        rng = MersenneTwister(321)
+        βtrue = [2.0, -2.0, 0.0, 0.0]
+        cd, _ = _simulate_covariate_data(rng, 45, βtrue; n_per_pair=10)
+
+        f = fit(BradleyTerryCovariates(), Bayesian(n_samples=800, n_burnin=400),
+                cd, SpikeSlabPrior(); rng=MersenneTwister(6))
+        pip = collect(values(inclusion_probabilities(f)))
+        @test pip[1] > 0.8 && pip[2] > 0.8          # true covariates included
+        @test pip[3] < 0.5 && pip[4] < 0.5          # null covariates mostly excluded
+
+        # inclusion probabilities require a spike-slab fit
+        fn = fit(BradleyTerryCovariates(), Bayesian(n_samples=100, n_burnin=50),
+                 cd; rng=MersenneTwister(6))
+        @test_throws ArgumentError inclusion_probabilities(fn)
+    end
+
+    @testset "Stepwise MLE selection" begin
+        rng = MersenneTwister(555)
+        βtrue = [1.8, -1.5, 0.0, 0.0, 0.0]
+        cd, _ = _simulate_covariate_data(rng, 50, βtrue; n_per_pair=12)
+
+        f = fit(BradleyTerryCovariates(), StepwiseMLE(direction=:both, criterion=:BIC), cd)
+        @test sort(f.result.selected) == [1, 2]     # picks the two real covariates
+        @test length(coefficients(f)) == 2
+        @test !isempty(f.result.trace)
+
+        # forward and backward also reach the right subset here
+        ff = fit(BradleyTerryCovariates(), StepwiseMLE(direction=:forward, criterion=:BIC), cd)
+        fb = fit(BradleyTerryCovariates(), StepwiseMLE(direction=:backward, criterion=:BIC), cd)
+        @test sort(ff.result.selected) == [1, 2]
+        @test sort(fb.result.selected) == [1, 2]
+
+        @test_throws ArgumentError StepwiseMLE(direction=:sideways)
+        @test_throws ArgumentError StepwiseMLE(criterion=:WAIC)
+    end
+
+    # Anchored covariate model: covariate-driven strengths + anchor calibration.
+    function _simulate_anchored_covariate_data(rng, K, βtrue, S, a, b, σ; n_per_pair=10)
+        cd, λ = _simulate_covariate_data(rng, K, βtrue; n_per_pair=n_per_pair)
+        anchor_labels = ["item$i" for i in S]      # labels are "item1"…"itemK"
+        y = [a + b * λ[i] + σ * randn(rng) for i in S]
+        return AnchoredData(cd, anchor_labels, y), cd, λ, y
+    end
+
+    @testset "BradleyTerryCovariatesAnchored — construction" begin
+        m = BradleyTerryCovariatesAnchored()
+        @test m isa Anchored{Covariates{BradleyTerry}}
+        @test Anchored(Covariates(BradleyTerry())) isa BradleyTerryCovariatesAnchored
+
+        # AnchoredData wrapping CovariateData, with the same validation as the
+        # PairwiseData path
+        wins = [0 3 1; 2 0 4; 5 1 0]
+        cd = CovariateData(PairwiseData(wins, ["A", "B", "C"]), [1.0; 0.5; -1.0][:, :], [:x])
+        ad = AnchoredData(cd, ["A", "C"], [1.0, 5.0])
+        @test ad isa AnchoredData{CovariateData{String}, String}
+        @test ad.anchor_groups == [[1], [3]]
+        @test ad.anchor_values == [1.0, 5.0]
+        @test AnchoredData(cd, Dict("B" => 3.0)).anchor_groups == [[2]]
+        # group anchors over a CovariateData resolve against the inner labels
+        @test AnchoredData(cd, [["A", "B"], ["C"]], [1.0, 2.0]).anchor_groups == [[1, 2], [3]]
+        @test_throws ArgumentError AnchoredData(cd, ["A", "D"], [1.0, 2.0])
+        @test_throws DimensionMismatch AnchoredData(cd, ["A"], [1.0, 2.0])
+        @test_throws ArgumentError AnchoredData(cd, ["A", "A"], [1.0, 2.0])
+        @test_throws ArgumentError AnchoredData(cd, String[], Float64[])
+
+        # combined prior wraps a β prior with default calibration priors
+        acp = AnchoredCovariatePrior(HorseshoePrior())
+        @test acp.β_prior isa HorseshoePrior
+        @test length(acp.calib_prior.μ) == 2
+        @test_throws DimensionMismatch AnchoredCovariatePrior(NormalPrior(2); calib_prior=NormalPrior(3))
+    end
+
+    @testset "Anchored covariate MLE recovery" begin
+        rng = MersenneTwister(2024)
+        βtrue = [1.5, -1.0, 0.0]
+        S = collect(1:20)
+        a_true, b_true, σ_true = 2.0, 3.0, 0.3
+        ad, cd, λtrue, y = _simulate_anchored_covariate_data(rng, 45, βtrue, S, a_true, b_true, σ_true)
+
+        m = BradleyTerryCovariatesAnchored()
+        f = fit(m, MLE(), ad)
+        @test f.converged
+        @test f.result isa AnchoredCovariateMLEResult
+        β̂ = collect(values(coefficients(f)))
+        @test isapprox(β̂, βtrue; atol=0.4)
+
+        cal = calibration(f)
+        @test isapprox(cal.a, a_true; atol=0.6)
+        @test isapprox(cal.b, b_true; atol=0.6)
+        @test cal.σ² > 0
+
+        # strengths are the uncentred λ = Zβ (calibration scale)
+        @test cor(strengths(f), λtrue) > 0.95
+
+        # SEs / Wald CIs from the joint information; null covariate covers zero
+        @test size(f.result.vcov) == (3, 3)
+        @test all(diag(f.result.vcov) .> 0)
+        ci = coefficient_intervals(f; level=0.95)
+        @test ci.x1[1] > 0 && ci.x2[2] < 0
+        @test ci.x3[1] < 0 < ci.x3[2]
+
+        # prediction: in-data anchored item near its measurement
+        @test isapprox(predict(f, S[1]), y[1]; atol=3 * σ_true + 1.0)
+        @test probability(f, "item1", "item2") ≈ probability(f, 1, 2)
+    end
+
+    @testset "Anchored covariate — new-item prediction" begin
+        rng = MersenneTwister(4040)
+        βtrue = [1.5, -1.0]
+        S = collect(1:25)
+        a_true, b_true = 1.0, 2.0
+        ad, cd, λtrue, y = _simulate_anchored_covariate_data(rng, 45, βtrue, S, a_true, b_true, 0.2)
+        m = BradleyTerryCovariatesAnchored()
+
+        f = fit(m, MLE(), ad)
+        cal = calibration(f)
+        z_new = cd.Z[3, :]                         # pretend item 3 is unseen
+        ŷ = predict(f, z_new)
+        @test isapprox(ŷ, cal.a + cal.b * dot(z_new, collect(values(coefficients(f)))); atol=1e-8)
+        # interval form returns (lo, hi)
+        lo, hi = predict(f, z_new; prob=0.9)
+        @test lo < ŷ < hi
+        @test_throws DimensionMismatch predict(f, [1.0])
+
+        # Bayesian: posterior-predictive draws / interval for an unseen covariate row
+        fb = fit(m, Bayesian(n_samples=600, n_burnin=300), ad; rng=MersenneTwister(2))
+        draws = predict(fb, z_new; rng=MersenneTwister(3))
+        @test length(draws) == 600
+        blo, bhi = predict(fb, z_new; prob=0.9, rng=MersenneTwister(3))
+        @test blo < bhi
+        @test_throws DimensionMismatch predict(fb, [1.0, 2.0, 3.0])
+    end
+
+    @testset "Anchored covariate Bayesian recovery (Normal)" begin
+        rng = MersenneTwister(99)
+        βtrue = [1.2, -0.8, 0.0]
+        S = collect(1:22)
+        a_true, b_true = 0.5, 2.5
+        ad, cd, λtrue, y = _simulate_anchored_covariate_data(rng, 40, βtrue, S, a_true, b_true, 0.3)
+        m = BradleyTerryCovariatesAnchored()
+
+        f = fit(m, Bayesian(n_samples=800, n_burnin=400), ad; rng=MersenneTwister(1))
+        @test f.result isa AnchoredCovariateMCMCSamples
+        β̂ = collect(values(coefficients(f)))
+        @test isapprox(β̂, βtrue; atol=0.4)
+        cal = calibration(f)
+        @test isapprox(cal.a, a_true; atol=0.7)
+        @test isapprox(cal.b, b_true; atol=0.7)
+        # inherited anchored accessors work on the combined result
+        @test length(posterior_mean(f)) == 40
+        @test length(posterior_std(f)) == 40
+        lo, hi = credible_interval(f, 1)
+        @test lo < hi
+        @test loglikelihood(f) isa Vector{Float64}
+        @test 0.0 < probability(f, 1, 2) < 1.0
+        # coefficient credible intervals
+        cib = coefficient_intervals(f; level=0.9)
+        @test cib.x1[1] > 0 && cib.x2[2] < 0
+    end
+
+    @testset "Anchored covariate — shrinkage and selection" begin
+        rng = MersenneTwister(123)
+        βtrue = [2.0, -2.0, 0.0, 0.0, 0.0]
+        S = collect(1:25)
+        ad, cd, λtrue, y = _simulate_anchored_covariate_data(rng, 50, βtrue, S, 1.0, 2.0, 0.3; n_per_pair=12)
+        m = BradleyTerryCovariatesAnchored()
+
+        # Horseshoe shrinks the null covariates
+        hs = fit(m, Bayesian(n_samples=800, n_burnin=400), ad, HorseshoePrior(); rng=MersenneTwister(5))
+        β̂ = collect(values(coefficients(hs)))
+        @test abs(β̂[1]) > 1.0 && abs(β̂[2]) > 1.0
+        @test all(abs.(β̂[3:5]) .< 0.5)
+
+        # Spike-and-slab inclusion probabilities recover the sparsity pattern
+        ss = fit(m, Bayesian(n_samples=800, n_burnin=400), ad, SpikeSlabPrior(); rng=MersenneTwister(6))
+        pip = collect(values(inclusion_probabilities(ss)))
+        @test pip[1] > 0.8 && pip[2] > 0.8
+        @test all(pip[3:5] .< 0.5)
+        @test_throws ArgumentError inclusion_probabilities(
+            fit(m, Bayesian(n_samples=100, n_burnin=50), ad; rng=MersenneTwister(6)))
+
+        # Stepwise picks the two real covariates by BIC
+        fs = fit(m, StepwiseMLE(direction=:both, criterion=:BIC), ad)
+        @test sort(fs.result.selected) == [1, 2]
+        @test keys(coefficient_intervals(fs)) == keys(coefficients(fs))
+        @test !isempty(fs.result.trace)
+    end
+
+    @testset "Group-averaged anchors — weighted calibration" begin
+        # Deterministic check that _profile_calibration solves the weighted (σ²/n_g)
+        # least-squares problem, computed by hand below.
+        μ = [0.0, 1.0, 2.0]; y = [0.0, 1.0, 3.0]; w = [1.0, 1.0, 4.0]
+        a, b, σ², rss = ComparativeJudgement._profile_calibration(μ, y, w)
+        @test isapprox(b, 33 / 21; atol=1e-9)
+        @test isapprox(a, (13 - (33 / 21) * 9) / 6; atol=1e-9)
+        @test isapprox(σ², rss / 3; atol=1e-12)
+        # Unit weights reproduce ordinary OLS (the singleton path).
+        a1, b1, _, _ = ComparativeJudgement._profile_calibration(μ, y, ones(3))
+        @test isapprox(b1, 1.5; atol=1e-9) && isapprox(a1, -1/6; atol=1e-9)
+    end
+
+    @testset "Group-averaged anchors — recovery and equivalence" begin
+        rng = MersenneTwister(2718)
+        K = 48
+        βtrue = [1.5, -1.0, 0.0]
+        cd, λtrue = _simulate_covariate_data(rng, K, βtrue; n_per_pair=12)
+        labels = ["item$i" for i in 1:K]
+        a_true, b_true, σ_true = 2.0, 3.0, 0.25
+
+        # 12 groups of 4 consecutive items; anchor noise scaled by 1/√n_g.
+        groups = [collect(g) for g in Iterators.partition(1:K, 4)]
+        glabels = [["item$i" for i in g] for g in groups]
+        ng = length.(groups)
+        ygrp = [a_true + b_true * mean(λtrue[g]) for g in groups] .+
+               [σ_true / sqrt(n) for n in ng] .* randn(rng, length(groups))
+        adg = AnchoredData(cd, glabels, ygrp)
+        m = BradleyTerryCovariatesAnchored()
+
+        # MLE recovers β and the calibration slope from group means.
+        f = fit(m, MLE(), adg)
+        @test f.converged
+        β̂ = collect(values(coefficients(f)))
+        @test isapprox(β̂, βtrue; atol=0.4)
+        cal = calibration(f)
+        @test isapprox(cal.b, b_true; atol=0.6)
+        @test isapprox(cal.a, a_true; atol=0.8)
+        @test cor(strengths(f), λtrue) > 0.95
+
+        # Bayesian group fit recovers too.
+        fb = fit(m, Bayesian(n_samples=700, n_burnin=400), adg; rng=MersenneTwister(1))
+        @test isapprox(collect(values(coefficients(fb))), βtrue; atol=0.4)
+        @test isapprox(calibration(fb).b, b_true; atol=0.7)
+
+        # Plain anchored model with the same group anchors: slope recovers
+        # (intercept absorbs the sum-to-zero centring of λ, so is not compared).
+        adp = AnchoredData(cd.data, glabels, ygrp)
+        bp = fit(BradleyTerryAnchored(), Bayesian(n_samples=700, n_burnin=400), adp;
+                 rng=MersenneTwister(2))
+        @test isapprox(calibration(bp).b, b_true; atol=0.8)
+
+        # Singleton equivalence: passing labels is identical to size-1 groups.
+        S = collect(1:2:K)
+        ys = [a_true + b_true * λtrue[i] for i in S] .+ σ_true .* randn(rng, length(S))
+        ad_lab = AnchoredData(cd, labels[S], ys)
+        ad_g1  = AnchoredData(cd, [[labels[i]] for i in S], ys)
+        f_lab = fit(m, MLE(), ad_lab)
+        f_g1  = fit(m, MLE(), ad_g1)
+        @test collect(values(coefficients(f_lab))) ≈ collect(values(coefficients(f_g1)))
+        @test calibration(f_lab) == calibration(f_g1)
+        # …and for the plain anchored model under a shared seed.
+        adp_lab = AnchoredData(cd.data, labels[S], ys)
+        adp_g1  = AnchoredData(cd.data, [[labels[i]] for i in S], ys)
+        bl = fit(BradleyTerryAnchored(), Bayesian(n_samples=200, n_burnin=100), adp_lab;
+                 rng=MersenneTwister(9))
+        bg = fit(BradleyTerryAnchored(), Bayesian(n_samples=200, n_burnin=100), adp_g1;
+                 rng=MersenneTwister(9))
+        @test bl.result.λ_samples ≈ bg.result.λ_samples
+        @test bl.result.β_samples ≈ bg.result.β_samples
     end
 
 end

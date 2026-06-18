@@ -208,36 +208,91 @@ end
 
 """
     AnchoredData(data, anchor_labels, anchor_values)
+    AnchoredData(data, anchor_groups, anchor_values)
     AnchoredData(data, anchors::AbstractDict)
+    AnchoredData(data, group => value, ...)
 
-Comparison data augmented with anchor measurements `y` for a subset of
-items, identified by label. Used to fit [`Anchored`](@ref) models, which
-calibrate the latent scale via `y = a + b·λ + ε`.
+Comparison data augmented with anchor measurements `y`, used to fit
+[`Anchored`](@ref) models, which calibrate the latent scale via `y = a + b·λ + ε`.
+
+Each measurement targets either a **single item** (passed by label, as
+`anchor_labels::Vector`) or a **group of items** (passed as `anchor_groups`, a
+vector of label-vectors). A group anchor is modelled as the group *mean*,
+
+```
+y_g = a + b · mean_{i∈G_g}(λ_i) + ε_g,   ε_g ~ N(0, σ²/n_g),   n_g = |G_g|,
+```
+
+so a larger group is measured more precisely (variance `σ²/n_g`). Single-item
+anchors are the special case `n_g = 1`, identical to the original model. Single
+and group anchors may be mixed in one dataset, and an item may appear in more than
+one group. Internally every anchor is stored as a group of item indices in
+`anchor_groups::Vector{Vector{Int}}`.
 """
 struct AnchoredData{D, L}
     data::D
-    anchor_idx::Vector{Int}
+    anchor_groups::Vector{Vector{Int}}
     anchor_values::Vector{Float64}
-    function AnchoredData(data::PairwiseData{L}, anchor_labels::Vector{L},
-                          anchor_values::Vector{<:Real}) where {L}
-        r = length(anchor_labels)
-        r >= 1 || throw(ArgumentError("Need at least 1 anchor, got none"))
-        length(anchor_values) == r || throw(DimensionMismatch(
-            "Got $r anchor labels but $(length(anchor_values)) anchor values"))
-        allunique(anchor_labels) || throw(ArgumentError("Anchor labels must be unique"))
-        anchor_idx = Vector{Int}(undef, r)
-        for (k, lbl) in enumerate(anchor_labels)
-            idx = findfirst(==(lbl), data.labels)
-            idx === nothing && throw(ArgumentError("Anchor label $(lbl) not found in data labels"))
-            anchor_idx[k] = idx
-        end
-        new{PairwiseData{L}, L}(data, anchor_idx, Vector{Float64}(anchor_values))
+    function AnchoredData{D, L}(data::D, anchor_groups::Vector{Vector{Int}},
+                               anchor_values::Vector{Float64}) where {D, L}
+        new{D, L}(data, anchor_groups, anchor_values)
     end
 end
-function AnchoredData(data::PairwiseData{L}, anchors::AbstractDict{L, <:Real}) where {L}
+
+# The labels against which anchor labels are resolved. `PairwiseData` carries
+# them directly; the covariate wrapper keeps them on its inner `data` (the
+# `CovariateData` method is defined after that type, below).
+_anchor_target_labels(data::PairwiseData) = data.labels
+
+# Resolve a label to its item index, or throw.
+function _resolve_anchor_label(labels, lbl)
+    idx = findfirst(==(lbl), labels)
+    idx === nothing && throw(ArgumentError("Anchor label $(lbl) not found in data labels"))
+    return idx
+end
+
+# Single-item anchors: each measurement targets one item (groups of size one).
+function AnchoredData(data, anchor_labels::Vector{L},
+                      anchor_values::Vector{<:Real}) where {L}
+    labels = _anchor_target_labels(data)
+    r = length(anchor_labels)
+    r >= 1 || throw(ArgumentError("Need at least 1 anchor, got none"))
+    length(anchor_values) == r || throw(DimensionMismatch(
+        "Got $r anchor labels but $(length(anchor_values)) anchor values"))
+    allunique(anchor_labels) || throw(ArgumentError("Anchor labels must be unique"))
+    groups = [[_resolve_anchor_label(labels, lbl)] for lbl in anchor_labels]
+    return AnchoredData{typeof(data), L}(data, groups, Vector{Float64}(anchor_values))
+end
+
+# Group anchors: each measurement targets a group of items, modelled as the mean.
+function AnchoredData(data, anchor_groups::Vector{<:AbstractVector{L}},
+                      anchor_values::Vector{<:Real}) where {L}
+    labels = _anchor_target_labels(data)
+    G = length(anchor_groups)
+    G >= 1 || throw(ArgumentError("Need at least 1 anchor group, got none"))
+    length(anchor_values) == G || throw(DimensionMismatch(
+        "Got $G anchor groups but $(length(anchor_values)) anchor values"))
+    groups = Vector{Vector{Int}}(undef, G)
+    for (g, grp) in enumerate(anchor_groups)
+        isempty(grp) && throw(ArgumentError("Anchor group $g is empty"))
+        allunique(grp) || throw(ArgumentError("Items within anchor group $g must be unique"))
+        groups[g] = [_resolve_anchor_label(labels, lbl) for lbl in grp]
+    end
+    return AnchoredData{typeof(data), L}(data, groups, Vector{Float64}(anchor_values))
+end
+
+# Dict convenience: keys are labels (single-item) or label-vectors (groups).
+function AnchoredData(data, anchors::AbstractDict{L, <:Real}) where {L}
     anchor_labels = collect(keys(anchors))
     anchor_values = [Float64(anchors[lbl]) for lbl in anchor_labels]
     return AnchoredData(data, anchor_labels, anchor_values)
+end
+
+# Pairs convenience for group anchors: `AnchoredData(data, ["a","b"] => 3.0, ["c"] => 4.0)`.
+function AnchoredData(data, anchors::Pair{<:AbstractVector, <:Real}...)
+    groups = [collect(first(p)) for p in anchors]
+    values = Float64[last(p) for p in anchors]
+    return AnchoredData(data, groups, values)
 end
 
 """
@@ -274,4 +329,280 @@ struct FittedComparativeModel{M <: AbstractComparativeModel, I <: InferenceMetho
     labels::Vector{L}
     converged::Bool
     iterations::Int
+end
+
+# ─────────────────────────── Covariate models ────────────────────────────
+#
+# A covariate model parameterises the latent strengths as a linear combination
+# of item-level covariates: λ_i = z_iᵀβ, so that
+# `logit P(i beats j) = (z_i − z_j)ᵀβ`. Estimation targets the coefficient
+# vector β ∈ ℝ^p instead of the K free strengths; λ is recovered as Z·β.
+
+"""
+    Covariates(model)
+
+Wrapper parameterising a comparative `model`'s latent strengths as a linear
+combination of item covariates, `λ_i = z_iᵀβ`. Fit with a [`CovariateData`](@ref)
+wrapping the comparison data and the item covariate matrix, e.g.
+
+```julia
+fit(BradleyTerryCovariates(), MLE(), CovariateData(data, Z, [:age, :size]))
+```
+
+See also [`BradleyTerryCovariates`](@ref).
+"""
+struct Covariates{M <: AbstractComparativeModel} <: AbstractComparativeModel
+    model::M
+end
+
+"""
+    BradleyTerryCovariates()
+
+Alias for `Covariates(BradleyTerry())`: the Bradley–Terry model whose latent
+strengths are a linear function of item covariates, `λ_i = z_iᵀβ`, so that
+`logit P(i beats j) = (z_i − z_j)ᵀβ`. See [`Covariates`](@ref) and [`fit`](@ref).
+"""
+const BradleyTerryCovariates = Covariates{BradleyTerry}
+BradleyTerryCovariates() = Covariates(BradleyTerry())
+
+"""
+    StepwiseMLE(; direction=:both, criterion=:AIC)
+
+Stepwise maximum-likelihood variable selection for a [`Covariates`](@ref)
+model. `direction` is `:forward`, `:backward`, or `:both`; `criterion` is `:AIC`
+or `:BIC`. Greedily adds/removes covariates to optimise the information
+criterion, then refits the selected subset. The result records the selected
+covariate indices and the selection trace; query it with the usual accessors
+([`coefficients`](@ref), [`strengths`](@ref)).
+"""
+struct StepwiseMLE <: InferenceMethod
+    direction::Symbol
+    criterion::Symbol
+    function StepwiseMLE(; direction::Symbol=:both, criterion::Symbol=:AIC)
+        direction in (:forward, :backward, :both) || throw(ArgumentError(
+            "direction must be :forward, :backward or :both, got $direction"))
+        criterion in (:AIC, :BIC) || throw(ArgumentError(
+            "criterion must be :AIC or :BIC, got $criterion"))
+        new(direction, criterion)
+    end
+end
+
+"""
+    HorseshoePrior(; τ₀=1.0)
+
+Horseshoe (global-local) shrinkage prior on the covariate coefficients β for a
+[`Bayesian`](@ref) [`Covariates`](@ref) fit. Each coefficient has its own local
+scale and shares a global scale `τ` (hyperprior scale `τ₀`), strongly shrinking
+small coefficients while leaving large ones almost unpenalised. Implemented with
+the inverse-gamma auxiliary representation of Makalic & Schmidt (2016).
+"""
+struct HorseshoePrior <: AbstractPrior
+    τ₀::Float64
+    function HorseshoePrior(; τ₀::Real=1.0)
+        τ₀ > 0 || throw(ArgumentError("τ₀ must be positive, got $τ₀"))
+        new(Float64(τ₀))
+    end
+end
+
+"""
+    SpikeSlabPrior(; v_slab=10.0, v_spike=0.01, π₀=0.5)
+
+Continuous spike-and-slab (SSVS) prior on the covariate coefficients β for a
+[`Bayesian`](@ref) [`Covariates`](@ref) fit. Each coefficient is drawn from a
+wide "slab" `N(0, v_slab)` when included or a narrow "spike" `N(0, v_spike)`
+when excluded, with prior inclusion probability `π₀`. Yields posterior
+inclusion probabilities per covariate ([`inclusion_probabilities`](@ref)).
+"""
+struct SpikeSlabPrior <: AbstractPrior
+    v_slab::Float64
+    v_spike::Float64
+    π₀::Float64
+    function SpikeSlabPrior(; v_slab::Real=10.0, v_spike::Real=0.01, π₀::Real=0.5)
+        v_slab > 0 || throw(ArgumentError("v_slab must be positive, got $v_slab"))
+        v_spike > 0 || throw(ArgumentError("v_spike must be positive, got $v_spike"))
+        v_slab > v_spike || throw(ArgumentError(
+            "v_slab ($v_slab) must exceed v_spike ($v_spike)"))
+        0 < π₀ < 1 || throw(ArgumentError("π₀ must be in (0, 1), got $π₀"))
+        new(Float64(v_slab), Float64(v_spike), Float64(π₀))
+    end
+end
+
+"""
+    CovariateData(data, Z, names)
+    CovariateData(data, Z)
+    CovariateData(data, name => values, ...)
+
+Comparison `data` augmented with an item covariate matrix `Z` (`K × p`, one row
+per item in the order of `data.labels`) and covariate `names`. Used to fit
+[`Covariates`](@ref) models, where `λ_i = z_iᵀβ`.
+
+An overall intercept (a covariate constant across items) is **not** identifiable:
+it cancels in the differences `z_i − z_j`, so such columns are rejected.
+"""
+struct CovariateData{L}
+    data::PairwiseData{L}
+    Z::Matrix{Float64}
+    names::Vector{Symbol}
+    function CovariateData(data::PairwiseData{L}, Z::AbstractMatrix,
+                           names::Vector{Symbol}) where {L}
+        K = length(data.labels)
+        size(Z, 1) == K || throw(DimensionMismatch(
+            "Z must have $K rows to match $K items, got $(size(Z, 1))"))
+        size(Z, 2) == length(names) || throw(DimensionMismatch(
+            "Z has $(size(Z, 2)) columns but $(length(names)) names given"))
+        Zf = Matrix{Float64}(Z)
+        for c in 1:size(Zf, 2)
+            col = @view Zf[:, c]
+            all(==(col[1]), col) && throw(ArgumentError(
+                "Covariate $(names[c]) is constant across items; it cancels in " *
+                "the comparison differences and is not identifiable. Drop it."))
+        end
+        new{L}(data, Zf, names)
+    end
+end
+function CovariateData(data::PairwiseData, Z::AbstractMatrix)
+    names = [Symbol("x", c) for c in 1:size(Z, 2)]
+    return CovariateData(data, Z, names)
+end
+function CovariateData(data::PairwiseData, cols::Pair{Symbol, <:AbstractVector}...)
+    names = Symbol[c.first for c in cols]
+    Z = reduce(hcat, [Vector{Float64}(c.second) for c in cols])
+    return CovariateData(data, Z, names)
+end
+
+# Anchor labels of a covariate dataset resolve against the underlying comparison
+# labels, letting `AnchoredData` wrap a `CovariateData` (the anchored covariate
+# model `Anchored{Covariates{…}}`).
+_anchor_target_labels(cd::CovariateData) = cd.data.labels
+
+"""
+    CovariateMLEResult
+
+Result of an [`MLE`](@ref) or [`StepwiseMLE`](@ref) [`Covariates`](@ref) fit:
+the coefficient estimates `β`, their covariance `vcov`, the log-likelihood, the
+item covariate matrix `Z`, covariate `names`, the indices of covariates retained
+in the model (`selected`), and the selection `trace` (empty for plain MLE).
+"""
+struct CovariateMLEResult
+    β::Vector{Float64}
+    vcov::Matrix{Float64}
+    loglik::Float64
+    Z::Matrix{Float64}
+    names::Vector{Symbol}
+    selected::Vector{Int}
+    trace::Vector{NamedTuple}
+end
+
+"""
+    CovariateMCMCSamples
+
+Posterior draws from a [`Bayesian`](@ref) [`Covariates`](@ref) fit: the
+`n_samples × p` matrix of coefficient draws `β_samples`, the per-draw
+log-likelihoods, the item covariate matrix `Z`, covariate `names`, and (for
+[`SpikeSlabPrior`](@ref) only) the `inclusion` indicator draws.
+"""
+struct CovariateMCMCSamples
+    β_samples::Matrix{Float64}        # n_samples × p
+    loglikelihoods::Vector{Float64}
+    inclusion::Union{Nothing, Matrix{Float64}}  # n_samples × p, spike-slab only
+    Z::Matrix{Float64}
+    names::Vector{Symbol}
+    n_samples::Int
+    n_burnin::Int
+    thin::Int
+end
+
+# ───────────────────── Anchored covariate models ──────────────────────────
+#
+# Composing the two wrappers: `Anchored{Covariates{BradleyTerry}}` puts an
+# anchor-measurement layer `y = a + b·λ + ε` on top of covariate-driven
+# strengths `λ_i = z_iᵀβ`. Because β is identified by the comparisons (constant
+# covariate columns are rejected), λ = Zβ has a determined location and is used
+# uncentred; the calibration `(a, b)` maps it onto the measurement scale, so the
+# fit can predict measurements for never-measured items from their covariates.
+
+"""
+    BradleyTerryCovariatesAnchored()
+
+Alias for `Anchored(Covariates(BradleyTerry()))`: the Bradley–Terry model whose
+strengths are a linear function of item covariates (`λ_i = z_iᵀβ`) *and* which is
+calibrated to anchor measurements `y = a + b·λ + ε` for a subset of items. Fit by
+[`MLE`](@ref), [`StepwiseMLE`](@ref) or [`Bayesian`](@ref) inference with an
+[`AnchoredData`](@ref) wrapping a [`CovariateData`](@ref). See [`Anchored`](@ref),
+[`Covariates`](@ref) and [`fit`](@ref).
+"""
+const BradleyTerryCovariatesAnchored = Anchored{Covariates{BradleyTerry}}
+BradleyTerryCovariatesAnchored() = Anchored(Covariates(BradleyTerry()))
+
+"""
+    AnchoredCovariatePrior(β_prior; calib_prior=NormalPrior(2), σ²_prior=InverseGammaPrior(2.0, 1.0))
+
+Priors for a [`Bayesian`](@ref) anchored covariate fit
+([`BradleyTerryCovariatesAnchored`](@ref)). `β_prior` is the shrinkage/selection
+prior on the covariate coefficients β — a [`NormalPrior`](@ref),
+[`HorseshoePrior`](@ref) or [`SpikeSlabPrior`](@ref) — `calib_prior` a bivariate
+[`NormalPrior`](@ref) on the calibration coefficients `(a, b)`, and `σ²_prior` an
+[`InverseGammaPrior`](@ref) on the anchor noise variance σ².
+"""
+struct AnchoredCovariatePrior{P <: AbstractPrior} <: AbstractPrior
+    β_prior::P
+    calib_prior::NormalPrior
+    σ²_prior::InverseGammaPrior
+    function AnchoredCovariatePrior(β_prior::P, calib_prior::NormalPrior,
+                                    σ²_prior::InverseGammaPrior) where {P <: AbstractPrior}
+        length(calib_prior.μ) == 2 || throw(DimensionMismatch(
+            "calib_prior must be bivariate (intercept and slope), got K=$(length(calib_prior.μ))"))
+        new{P}(β_prior, calib_prior, σ²_prior)
+    end
+end
+function AnchoredCovariatePrior(β_prior::AbstractPrior;
+                                calib_prior::NormalPrior=NormalPrior(2),
+                                σ²_prior::InverseGammaPrior=InverseGammaPrior(2.0, 1.0))
+    return AnchoredCovariatePrior(β_prior, calib_prior, σ²_prior)
+end
+
+"""
+    AnchoredCovariateMLEResult
+
+Result of an [`MLE`](@ref) or [`StepwiseMLE`](@ref) anchored covariate fit: the
+covariate coefficients `β` with covariance `vcov`, the calibration parameters
+`a`, `b`, `σ²`, the joint log-likelihood, the covariate matrix `Z` and `names`,
+the retained covariate indices (`selected`), and the selection `trace`.
+"""
+struct AnchoredCovariateMLEResult
+    β::Vector{Float64}
+    vcov::Matrix{Float64}
+    a::Float64
+    b::Float64
+    σ²::Float64
+    loglik::Float64
+    Z::Matrix{Float64}
+    names::Vector{Symbol}
+    selected::Vector{Int}
+    trace::Vector{NamedTuple}
+end
+
+"""
+    AnchoredCovariateMCMCSamples
+
+Posterior draws from a [`Bayesian`](@ref) anchored covariate fit: latent
+strengths `λ_samples` (`n_samples × K`, the raw `Zβ`), calibration coefficients
+`β_samples` (`n_samples × 2`, columns `a`, `b`), anchor variances `σ²_samples`,
+joint log-likelihoods, covariate coefficients `βcov_samples` (`n_samples × p`),
+and (for a [`SpikeSlabPrior`](@ref) only) the `inclusion` indicator draws. The
+`λ_samples`/`β_samples`/`σ²_samples` field names match
+[`AnchoredMCMCSamples`](@ref) so the anchored accessors apply directly.
+"""
+struct AnchoredCovariateMCMCSamples
+    λ_samples::Matrix{Float64}        # n_samples × K, raw Zβ
+    β_samples::Matrix{Float64}        # n_samples × 2 (columns a, b)
+    σ²_samples::Vector{Float64}
+    loglikelihoods::Vector{Float64}
+    βcov_samples::Matrix{Float64}     # n_samples × p, covariate coefficients
+    inclusion::Union{Nothing, Matrix{Float64}}
+    Z::Matrix{Float64}
+    names::Vector{Symbol}
+    n_samples::Int
+    n_burnin::Int
+    thin::Int
 end
