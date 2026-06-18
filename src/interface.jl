@@ -4,11 +4,14 @@
 Fit a comparative judgement `model` to `data` and return a
 [`FittedComparativeModel`](@ref).
 
-The inference `method` selects the estimation strategy ([`MLE`](@ref) or
-[`Bayesian`](@ref)); when omitted, each model picks a sensible default
-([`MLE`](@ref) for [`BradleyTerry`](@ref), [`Bayesian`](@ref) for
-[`Anchored`](@ref) models). Bayesian fits accept a prior and an `rng` keyword
-for reproducibility.
+The inference `method` selects the estimation strategy ([`MLE`](@ref),
+[`StepwiseMLE`](@ref) or [`Bayesian`](@ref)); when omitted, each model picks a
+sensible default ([`MLE`](@ref) for [`BradleyTerry`](@ref) and
+[`Covariates`](@ref) models, [`Bayesian`](@ref) for [`Anchored`](@ref) models).
+Bayesian fits accept a prior and an `rng` keyword for reproducibility. The
+anchored covariate model ([`BradleyTerryCovariatesAnchored`](@ref)) is fit with an
+[`AnchoredData`](@ref) wrapping a [`CovariateData`](@ref) and supports all three
+methods.
 """
 function fit end
 
@@ -106,6 +109,7 @@ function credible_interval end
 """
     predict(fitted, k; prob=nothing, rng=Random.default_rng())
     predict(fitted, label; prob=nothing, rng=Random.default_rng())
+    predict(fitted, z::AbstractVector; prob=nothing, rng=Random.default_rng())
     predict(fitted)
 
 Posterior-predictive anchor measurements `y* = a + b·λ + ε` for an
@@ -115,6 +119,11 @@ With an item index `k` or `label`, returns a vector of posterior-predictive
 draws, or the symmetric `prob` credible interval `(lo, hi)` when `prob` is
 given. With no item argument, returns the vector of posterior-predictive
 means for all items.
+
+For an anchored *covariate* fit ([`BradleyTerryCovariatesAnchored`](@ref)), a
+covariate vector `z` predicts the measurement of an unseen item from its
+covariates alone (`y* = a + b·zᵀβ`). [`MLE`](@ref) fits return the point
+prediction, or a normal interval from `σ̂²` when `prob` is given.
 """
 function predict end
 

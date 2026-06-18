@@ -9,11 +9,13 @@ export AbstractComparativeModel, PairwiseModel, RankingModel
 export BradleyTerry, PlackettLuce, ThurstoneCaseV
 export Anchored, BradleyTerryAnchored
 export Covariates, BradleyTerryCovariates
+export BradleyTerryCovariatesAnchored
 export InferenceMethod, MLE, Bayesian, StepwiseMLE
 export PairwiseData, AnchoredData, CovariateData, FittedComparativeModel
 export AbstractPrior, NormalPrior, InverseGammaPrior, AnchoredPrior
-export HorseshoePrior, SpikeSlabPrior
+export HorseshoePrior, SpikeSlabPrior, AnchoredCovariatePrior
 export BTMCMCSamples, AnchoredMCMCSamples, CovariateMLEResult, CovariateMCMCSamples
+export AnchoredCovariateMLEResult, AnchoredCovariateMCMCSamples
 export fit, loglikelihood, probability, predict, calibration, strengths
 export coefficients, coefficient_std, coefficient_intervals, inclusion_probabilities
 export posterior_mean, posterior_std, credible_interval
@@ -24,5 +26,6 @@ include("utils.jl")
 include("polya_gamma.jl")
 include("models/bradley_terry.jl")
 include("models/bradley_terry_covariates.jl")
+include("models/bradley_terry_covariates_anchored.jl")
 
 end
