@@ -236,17 +236,25 @@ hs = fit(BradleyTerryCovariates(), method, cd, HorseshoePrior();
 coefficients(hs)
 ```
 
-Overlaying the horseshoe posterior means on the `NormalPrior` ones makes the
-shrinkage explicit: the two signal coefficients are barely moved, while the three
-noise coefficients are pulled hard toward zero:
+Overlaying the horseshoe posterior means and 95% credible intervals on the
+`NormalPrior` ones makes the shrinkage explicit: the two signal coefficients are
+barely moved, while the three noise coefficients are pulled hard toward zero and
+their intervals tighten around it:
 
 ```@example cov
-mn = vec(mean(bayes.result.β_samples, dims=1))    # Normal prior
-mh = vec(mean(hs.result.β_samples, dims=1))        # Horseshoe prior
-scatter(1:p, mn; label="Normal prior", xticks=(1:p, string.(cd.names)),
-        xlabel="covariate", ylabel="posterior mean β", legend=:topright)
-scatter!(1:p, mh; marker=:diamond, label="Horseshoe prior")
-scatter!(1:p, β_true; marker=:x, markersize=7, color=:red, label="truth")
+xs = 1:p
+mn = collect(values(coefficients(bayes)))                     # Normal prior
+mh = collect(values(coefficients(hs)))                        # Horseshoe prior
+cin = collect(values(coefficient_intervals(bayes; level=0.95)))
+cih = collect(values(coefficient_intervals(hs;    level=0.95)))
+lon, hin = first.(cin), last.(cin)
+loh, hih = first.(cih), last.(cih)
+scatter(xs .- 0.1, mn; yerror=(mn .- lon, hin .- mn), label="Normal prior",
+        xticks=(xs, string.(cd.names)), xlabel="covariate",
+        ylabel="posterior β (mean, 95% CI)", legend=:topright)
+scatter!(xs .+ 0.1, mh; yerror=(mh .- loh, hih .- mh), marker=:diamond,
+         label="Horseshoe prior")
+scatter!(xs, β_true; marker=:x, markersize=7, color=:red, label="truth")
 hline!([0]; color=:black, linestyle=:dash, label="")
 ```
 
