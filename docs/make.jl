@@ -19,7 +19,6 @@ makedocs(;
         "Bradley–Terry models" => "bradley_terry.md",
         "Anchored models" => "anchored_bt.md",
         "Covariate models" => "covariate_bt.md",
-        "Anchored covariate models" => "covariate_anchored_bt.md",
         "API reference" => "api.md",
     ],
 )
