@@ -856,4 +856,168 @@ using LinearAlgebra: diag, dot
         @test !isempty(f.result.trace)
     end
 
+    # ─── Rater heterogeneity and intransitivity ──────────────────────────────
+
+    # Simulate rater-tagged data: rater r follows BT with reliability qtrue[r]
+    # and otherwise guesses at random.
+    function _simulate_rater_data(rng, K, λtrue, qtrue; n_per=4)
+        M = length(qtrue)
+        items = ["item" * lpad(i, 2, '0') for i in 1:K]
+        raters = ["r$r" for r in 1:M]
+        ws = String[]; ls = String[]; wh = String[]
+        for r in 1:M, i in 1:K, j in (i + 1):K
+            for _ in 1:n_per
+                p = qtrue[r] / (1 + exp(-(λtrue[i] - λtrue[j]))) + (1 - qtrue[r]) / 2
+                if rand(rng) < p
+                    push!(ws, items[i]); push!(ls, items[j])
+                else
+                    push!(ws, items[j]); push!(ls, items[i])
+                end
+                push!(wh, raters[r])
+            end
+        end
+        return RaterData(ws, ls, wh)
+    end
+
+    # Simulate data with a planted skew-symmetric intransitivity Γ.
+    function _simulate_intransitive_data(rng, K, λtrue, Γ; n_per_pair=25)
+        wins = zeros(Int, K, K)
+        for i in 1:K, j in (i + 1):K
+            p = 1 / (1 + exp(-(λtrue[i] - λtrue[j] + Γ[i, j])))
+            for _ in 1:n_per_pair
+                rand(rng) < p ? (wins[i, j] += 1) : (wins[j, i] += 1)
+            end
+        end
+        return PairwiseData(wins, ["item" * lpad(i, 2, '0') for i in 1:K])
+    end
+
+    @testset "RaterData construction" begin
+        rd = RaterData(["A", "C", "B"], ["B", "A", "C"], ["r1", "r1", "r2"])
+        @test length(rd.winner) == 3
+        @test sort(rd.labels) == ["A", "B", "C"]
+        @test length(rd.raters) == 2
+        @test_throws DimensionMismatch RaterData(["A"], ["B", "C"], ["r1", "r1"])
+        @test_throws ArgumentError RaterData(["A", "A"], ["A", "B"], ["r1", "r1"])  # self-comparison
+        rd2 = RaterData(["A", "B"], ["B", "A"], ["r1", "r2"];
+                        item_labels=["A", "B"], rater_labels=["r1", "r2"])
+        @test rd2.labels == ["A", "B"]
+        @test_throws ArgumentError RaterData(["A", "B"], ["B", "A"], ["r1", "x"];
+                                             rater_labels=["r1", "r2"])
+    end
+
+    @testset "BetaPrior and bundled priors" begin
+        @test BetaPrior().a == 1.0 && BetaPrior().b == 1.0
+        @test_throws ArgumentError BetaPrior(-1.0, 1.0)
+        @test_throws ArgumentError BetaPrior(1.0, 0.0)
+        rp = RaterHeterogeneityPrior()
+        @test rp.λ_prior === nothing && rp.q_prior isa BetaPrior
+        ip = IntransitivityPrior()
+        @test ip.λ_prior === nothing && ip.σ²γ_prior isa InverseGammaPrior
+    end
+
+    @testset "Rater-heterogeneity BradleyTerry MLE recovery" begin
+        rng = MersenneTwister(3)
+        K = 10
+        λtrue = collect(range(2.5, -2.5; length=K))
+        qtrue = [0.95, 0.9, 0.85, 0.25, 0.15, 0.05]
+        rd = _simulate_rater_data(rng, K, λtrue, qtrue; n_per=4)
+
+        f = fit(BradleyTerryRaterHeterogeneity(), MLE(), rd)
+        @test f.converged
+        λ̂ = strengths(f)
+        @test sum(λ̂) ≈ 0.0 atol=1e-8
+        @test cor(λ̂, λtrue) > 0.85
+
+        q = rater_reliabilities(f)
+        @test keys(q) == (:r1, :r2, :r3, :r4, :r5, :r6)
+        qv = collect(values(q))
+        @test all(0.0 .<= qv .<= 1.0)
+        @test mean(qv[1:3]) > mean(qv[4:6]) + 0.3        # reliable raters stand out
+
+        @test fit(BradleyTerryRaterHeterogeneity(), rd).converged    # default-method overload
+        @test probability(f, "item01", "item02") ≈ probability(f, 1, 2)
+        @test 0.0 < probability(f, 1, 2) < 1.0
+        @test_throws ArgumentError probability(f, "item01", "nope")
+        @test loglikelihood(f) <= 0.0
+    end
+
+    @testset "Rater-heterogeneity BradleyTerry Bayesian recovery" begin
+        rng = MersenneTwister(8)
+        K = 10
+        λtrue = collect(range(2.5, -2.5; length=K))
+        qtrue = [0.92, 0.88, 0.2, 0.1]
+        rd = _simulate_rater_data(rng, K, λtrue, qtrue; n_per=5)
+
+        f = fit(BradleyTerryRaterHeterogeneity(), Bayesian(n_samples=800, n_burnin=400),
+                rd; rng=MersenneTwister(1))
+        @test length(strengths(f)) == K
+        @test length(posterior_std(f)) == K
+        @test cor(posterior_mean(f), λtrue) > 0.8
+        lo, hi = credible_interval(f, 1)
+        @test lo < hi
+        @test loglikelihood(f) isa Vector{Float64}
+        qv = collect(values(rater_reliabilities(f)))
+        @test all(0.0 .<= qv .<= 1.0)
+        @test mean(qv[1:2]) > mean(qv[3:4]) + 0.2
+        @test 0.0 < probability(f, 1, 2) < 1.0
+    end
+
+    @testset "Intransitive BradleyTerry MLE recovery" begin
+        rng = MersenneTwister(11)
+        K = 8
+        λtrue = collect(range(2.0, -2.0; length=K))
+        Γ = zeros(K, K); g = 3.0
+        for (a, b) in ((6, 7), (7, 8), (8, 6)); Γ[a, b] += g; Γ[b, a] -= g; end
+        data = _simulate_intransitive_data(rng, K, λtrue, Γ; n_per_pair=25)
+
+        f = fit(BradleyTerryIntransitive(), MLE(), data)
+        @test f.converged
+        λ̂ = strengths(f)
+        @test sum(λ̂) ≈ 0.0 atol=1e-8
+        @test cor(λ̂, λtrue) > 0.9
+
+        Γ̂ = intransitivity(f)
+        @test maximum(abs.(Γ̂ .+ transpose(Γ̂))) < 1e-10      # skew-symmetric
+        cyc = [abs(Γ̂[6, 7]), abs(Γ̂[7, 8]), abs(Γ̂[6, 8])]
+        off = [abs(Γ̂[i, j]) for i in 1:K for j in (i + 1):K
+               if !((i, j) in ((6, 7), (7, 8), (6, 8)))]
+        @test minimum(cyc) > 1.0
+        @test minimum(cyc) > maximum(off)                    # planted cycle stands out
+
+        # γ flips the order: item 8 beats item 6 despite a lower strength
+        @test λ̂[8] < λ̂[6]
+        @test probability(f, "item08", "item06") > 0.5
+        @test probability(f, 8, 6) ≈ probability(f, "item08", "item06")
+        @test_throws ArgumentError probability(f, "item08", "nope")
+
+        @test fit(BradleyTerryIntransitive(), data).converged   # default-method overload
+        fsmall = fit(BradleyTerryIntransitive(), MLE(), data; σ²γ=0.05)
+        @test maximum(abs, intransitivity(fsmall)) < maximum(abs, intransitivity(f))
+        @test_throws ArgumentError fit(BradleyTerryIntransitive(), MLE(), data; σ²γ=-1.0)
+    end
+
+    @testset "Intransitive BradleyTerry Bayesian recovery" begin
+        rng = MersenneTwister(11)
+        K = 8
+        λtrue = collect(range(2.0, -2.0; length=K))
+        Γ = zeros(K, K); g = 3.0
+        for (a, b) in ((6, 7), (7, 8), (8, 6)); Γ[a, b] += g; Γ[b, a] -= g; end
+        data = _simulate_intransitive_data(rng, K, λtrue, Γ; n_per_pair=25)
+
+        f = fit(BradleyTerryIntransitive(), Bayesian(n_samples=800, n_burnin=400),
+                data; rng=MersenneTwister(2))
+        @test length(strengths(f)) == K
+        @test cor(posterior_mean(f), λtrue) > 0.9
+        @test length(posterior_std(f)) == K
+        lo, hi = credible_interval(f, 1)
+        @test lo < hi
+        @test loglikelihood(f) isa Vector{Float64}
+        Γ̄ = intransitivity(f)
+        @test maximum(abs.(Γ̄ .+ transpose(Γ̄))) < 1e-10
+        cyc = [abs(Γ̄[6, 7]), abs(Γ̄[7, 8]), abs(Γ̄[6, 8])]
+        @test minimum(cyc) > 1.0
+        @test 0.0 < probability(f, 1, 2) < 1.0
+        @test all(f.result.σ²γ_samples .> 0)
+    end
+
 end

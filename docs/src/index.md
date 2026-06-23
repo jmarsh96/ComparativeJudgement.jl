@@ -24,8 +24,21 @@ The package implements two pairwise-comparison models — **Bradley–Terry**
   ``\lambda_i = z_i^\top\beta``, with MLE, stepwise selection, and Bayesian
   shrinkage priors.
 
+Bradley–Terry additionally offers two structural extensions, each fittable by
+MLE or Bayesian:
+
+- **Rater heterogeneity** — a mixture in which rater ``r`` follows Bradley–Terry
+  with reliability ``q_r`` and otherwise guesses,
+  ``q_r\,\sigma(\lambda_i - \lambda_j) + (1 - q_r)/2``, so unreliable assessors
+  are down-weighted and flagged.
+- **Intransitivity** — a skew-symmetric per-pair term ``\gamma_{ij} = -\gamma_{ji}``
+  added to the predictor, ``\operatorname{logit} P(i \succ j) = (\lambda_i -
+  \lambda_j) + \gamma_{ij}``, measuring departures from a single transitive scale.
+
 See the [Bradley–Terry](bradley_terry.md) and [Thurstone Case V](thurstone_case_v.md)
-tutorials for worked examples on simulated data, and the [API reference](api.md)
+tutorials for worked examples on simulated data, including the
+[rater-heterogeneity](rater_heterogeneity_bt.md) and
+[intransitive](intransitivity_bt.md) models, and the [API reference](api.md)
 for the full interface.
 
 ## Installation

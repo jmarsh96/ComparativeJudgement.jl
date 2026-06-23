@@ -20,6 +20,8 @@ makedocs(;
             "Bradley–Terry models" => "bradley_terry.md",
             "Anchored models" => "anchored_bt.md",
             "Covariate models" => "covariate_bt.md",
+            "Rater-heterogeneity models" => "rater_heterogeneity_bt.md",
+            "Intransitive models" => "intransitivity_bt.md",
         ],
         "Thurstone Case V" => [
             "Thurstone Case V models" => "thurstone_case_v.md",

@@ -23,6 +23,13 @@ function _sample_inv_gamma(rng::AbstractRNG, α::Float64, β::Float64)::Float64
     return β / _sample_gamma(rng, α)
 end
 
+# Sample Beta(a, b) as G_a / (G_a + G_b) with G_a ~ Gamma(a), G_b ~ Gamma(b).
+function _sample_beta(rng::AbstractRNG, a::Float64, b::Float64)::Float64
+    ga = _sample_gamma(rng, a)
+    gb = _sample_gamma(rng, b)
+    return ga / (ga + gb)
+end
+
 # Inverse standard-normal CDF (quantile) via Acklam's rational approximation,
 # accurate to ~1.15e-9 over the whole range. Used for Wald confidence intervals;
 # avoids pulling in a SpecialFunctions/Distributions dependency for one z-value.

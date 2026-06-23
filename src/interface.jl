@@ -129,3 +129,24 @@ as a named tuple `(a = ..., b = ..., σ² = ...)` for the anchor model
 `y = a + b·λ + ε`, `ε ~ N(0, σ²)`.
 """
 function calibration end
+
+"""
+    rater_reliabilities(fitted)
+
+Estimated rater reliabilities `q_r ∈ [0, 1]` of a [`RaterHeterogeneity`](@ref)
+fit, as a named tuple keyed by rater label. Point estimates for [`MLE`](@ref)
+fits, posterior means for [`Bayesian`](@ref) fits. A low `q_r` flags a rater
+whose judgements are close to random.
+"""
+function rater_reliabilities end
+
+"""
+    intransitivity(fitted)
+
+Estimated skew-symmetric intransitivity terms `γᵢⱼ = −γⱼᵢ` of an
+[`Intransitive`](@ref) fit, as a `K × K` matrix (zero on the diagonal and on
+unobserved pairs). Point estimates for [`MLE`](@ref) fits, posterior means for
+[`Bayesian`](@ref) fits. Entries far from zero mark pairs the unidimensional
+scale cannot explain.
+"""
+function intransitivity end

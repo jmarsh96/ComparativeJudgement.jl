@@ -550,3 +550,217 @@ struct CovariateMCMCSamples
     n_burnin::Int
     thin::Int
 end
+
+# ──────────────────────── Rater-heterogeneity models ─────────────────────────
+#
+# A mixture in which rater r follows Bradley–Terry with probability q_r and
+# guesses at random otherwise:
+# `P(rater r judges i ≻ j) = q_r·σ(λᵢ − λⱼ) + (1 − q_r)/2`. The reliabilities
+# q_r down-weight inattentive assessors and are themselves a quality signal.
+
+"""
+    RaterHeterogeneity(model)
+
+Wrapper turning a comparative `model` into a rater-heterogeneity mixture: rater
+`r` follows the base model with reliability `q_r` and guesses at random
+otherwise, so `P(rater r judges i ≻ j) = q_r·σ(λᵢ − λⱼ) + (1 − q_r)/2`. Fit with
+a [`RaterData`](@ref) holding per-rater comparisons. See also
+[`BradleyTerryRaterHeterogeneity`](@ref).
+"""
+struct RaterHeterogeneity{M <: AbstractComparativeModel} <: AbstractComparativeModel
+    model::M
+end
+
+"""
+    BradleyTerryRaterHeterogeneity()
+
+Alias for `RaterHeterogeneity(BradleyTerry())`: the Bradley–Terry rater
+mixture `P(rater r judges i ≻ j) = q_r·σ(λᵢ − λⱼ) + (1 − q_r)/2`, with a
+rater-specific reliability `q_r ∈ [0, 1]`. See [`RaterHeterogeneity`](@ref) and
+[`fit`](@ref).
+"""
+const BradleyTerryRaterHeterogeneity = RaterHeterogeneity{BradleyTerry}
+BradleyTerryRaterHeterogeneity() = RaterHeterogeneity(BradleyTerry())
+
+"""
+    Intransitive(model)
+
+Wrapper adding a skew-symmetric per-pair term `γᵢⱼ = −γⱼᵢ` to a comparative
+`model`'s linear predictor, `logit P(i ≻ j) = (λᵢ − λⱼ) + γᵢⱼ`, capturing
+preference structure the unidimensional scale cannot explain. Fit with an
+ordinary [`PairwiseData`](@ref). See also [`BradleyTerryIntransitive`](@ref).
+"""
+struct Intransitive{M <: AbstractComparativeModel} <: AbstractComparativeModel
+    model::M
+end
+
+"""
+    BradleyTerryIntransitive()
+
+Alias for `Intransitive(BradleyTerry())`: the Bradley–Terry model with a
+skew-symmetric intransitivity term, `logit P(i ≻ j) = (λᵢ − λⱼ) + γᵢⱼ`,
+`γᵢⱼ = −γⱼᵢ`. See [`Intransitive`](@ref) and [`fit`](@ref).
+"""
+const BradleyTerryIntransitive = Intransitive{BradleyTerry}
+BradleyTerryIntransitive() = Intransitive(BradleyTerry())
+
+"""
+    BetaPrior(a=1, b=1)
+
+Beta prior `Beta(a, b)` (`a, b > 0`) on a rater reliability `q_r ∈ [0, 1]` of a
+[`RaterHeterogeneity`](@ref) fit. The default `Beta(1, 1)` is uniform.
+"""
+struct BetaPrior <: AbstractPrior
+    a::Float64
+    b::Float64
+    function BetaPrior(a::Real=1.0, b::Real=1.0)
+        a > 0 || throw(ArgumentError("a must be positive, got $a"))
+        b > 0 || throw(ArgumentError("b must be positive, got $b"))
+        new(Float64(a), Float64(b))
+    end
+end
+
+"""
+    RaterHeterogeneityPrior(; λ_prior=nothing, q_prior=BetaPrior())
+
+Priors for a [`Bayesian`](@ref) [`RaterHeterogeneity`](@ref) fit: a
+[`NormalPrior`](@ref) on the latent strengths λ (`λ_prior`, defaulting to
+`NormalPrior(K)` when left as `nothing`) and a [`BetaPrior`](@ref) shared by the
+rater reliabilities `q_r` (`q_prior`).
+"""
+struct RaterHeterogeneityPrior <: AbstractPrior
+    λ_prior::Union{Nothing, NormalPrior}
+    q_prior::BetaPrior
+    function RaterHeterogeneityPrior(; λ_prior::Union{Nothing, NormalPrior}=nothing,
+                                     q_prior::BetaPrior=BetaPrior())
+        new(λ_prior, q_prior)
+    end
+end
+
+"""
+    IntransitivityPrior(; λ_prior=nothing, σ²γ_prior=InverseGammaPrior(2, 1))
+
+Priors for a [`Bayesian`](@ref) [`Intransitive`](@ref) fit: a
+[`NormalPrior`](@ref) on the latent strengths λ (`λ_prior`, defaulting to
+`NormalPrior(K)` when left as `nothing`) and an [`InverseGammaPrior`](@ref) on
+the variance `σ²_γ` of the skew-symmetric terms `γᵢⱼ ~ N(0, σ²_γ)` (`σ²γ_prior`).
+Sampling `σ²_γ` lets the fit infer the overall amount of intransitivity.
+"""
+struct IntransitivityPrior <: AbstractPrior
+    λ_prior::Union{Nothing, NormalPrior}
+    σ²γ_prior::InverseGammaPrior
+    function IntransitivityPrior(; λ_prior::Union{Nothing, NormalPrior}=nothing,
+                                 σ²γ_prior::InverseGammaPrior=InverseGammaPrior(2.0, 1.0))
+        new(λ_prior, σ²γ_prior)
+    end
+end
+
+"""
+    RaterData(winners, losers, raters; item_labels=nothing, rater_labels=nothing)
+
+Per-rater pairwise comparison data for a [`RaterHeterogeneity`](@ref) fit. Each
+comparison `c` records the `winners[c]` item that beat the `losers[c]` item, as
+judged by rater `raters[c]` (all given by label). Item and rater labels are
+inferred in order of first appearance unless `item_labels` / `rater_labels` are
+supplied to fix the ordering.
+"""
+struct RaterData{L, R}
+    winner::Vector{Int}        # item index of the winner of each comparison
+    loser::Vector{Int}         # item index of the loser of each comparison
+    rater::Vector{Int}         # rater index of each comparison
+    labels::Vector{L}          # K item labels
+    raters::Vector{R}          # M rater labels
+end
+
+function RaterData(winners::AbstractVector, losers::AbstractVector,
+                   raters::AbstractVector; item_labels=nothing, rater_labels=nothing)
+    n = length(winners)
+    (length(losers) == n && length(raters) == n) || throw(DimensionMismatch(
+        "winners, losers and raters must have equal length, got " *
+        "$(length(winners)), $(length(losers)), $(length(raters))"))
+    n >= 1 || throw(ArgumentError("Need at least 1 comparison, got none"))
+    ilabels = item_labels === nothing ? unique(vcat(collect(winners), collect(losers))) :
+              collect(item_labels)
+    rlabels = rater_labels === nothing ? unique(collect(raters)) : collect(rater_labels)
+    length(ilabels) >= 2 || throw(ArgumentError(
+        "Need at least 2 distinct items, got $(length(ilabels))"))
+    iidx = Dict(l => i for (i, l) in enumerate(ilabels))
+    ridx = Dict(r => i for (i, r) in enumerate(rlabels))
+    w = Vector{Int}(undef, n); l = Vector{Int}(undef, n); r = Vector{Int}(undef, n)
+    for c in 1:n
+        haskey(iidx, winners[c]) || throw(ArgumentError("Unknown item label $(winners[c])"))
+        haskey(iidx, losers[c])  || throw(ArgumentError("Unknown item label $(losers[c])"))
+        haskey(ridx, raters[c])  || throw(ArgumentError("Unknown rater label $(raters[c])"))
+        w[c] = iidx[winners[c]]; l[c] = iidx[losers[c]]; r[c] = ridx[raters[c]]
+        w[c] == l[c] && throw(ArgumentError("Comparison $c pits item $(winners[c]) against itself"))
+    end
+    return RaterData{eltype(ilabels), eltype(rlabels)}(w, l, r, ilabels, rlabels)
+end
+
+"""
+    RaterMLEResult
+
+Maximum-likelihood fit of a [`RaterHeterogeneity`](@ref) model: the centred
+latent strengths λ, the rater reliabilities `q` (one per rater label), and the
+maximised mixture log-likelihood. Query with [`strengths`](@ref),
+[`rater_reliabilities`](@ref) and [`loglikelihood`](@ref).
+"""
+struct RaterMLEResult{R}
+    λ::Vector{Float64}
+    q::Vector{Float64}
+    rater_labels::Vector{R}
+    loglik::Float64
+end
+
+"""
+    RaterMCMCSamples
+
+Posterior draws from a [`Bayesian`](@ref) [`RaterHeterogeneity`](@ref) fit: the
+`n_samples × K` matrix of latent-strength draws, the `n_samples × M` matrix of
+rater-reliability draws `q`, the rater labels, and per-draw log-likelihoods.
+"""
+struct RaterMCMCSamples{R}
+    λ_samples::Matrix{Float64}        # n_samples × K
+    q_samples::Matrix{Float64}        # n_samples × M
+    rater_labels::Vector{R}
+    loglikelihoods::Vector{Float64}
+    n_samples::Int
+    n_burnin::Int
+    thin::Int
+end
+
+"""
+    IntransitiveMLEResult
+
+Penalised maximum-likelihood fit of an [`Intransitive`](@ref) model: the centred
+latent strengths λ, the skew-symmetric terms `γ` for each observed pair (`pairs`
+holds the `(i, j)`, `i < j` indices), the ridge penalty scale `σ²γ`, and the
+maximised penalised log-likelihood. Query with [`strengths`](@ref),
+[`intransitivity`](@ref) and [`loglikelihood`](@ref).
+"""
+struct IntransitiveMLEResult
+    λ::Vector{Float64}
+    pairs::Vector{Tuple{Int, Int}}
+    γ::Vector{Float64}
+    σ²γ::Float64
+    loglik::Float64
+end
+
+"""
+    IntransitiveMCMCSamples
+
+Posterior draws from a [`Bayesian`](@ref) [`Intransitive`](@ref) fit: the
+`n_samples × K` matrix of latent-strength draws, the `n_samples × P` matrix of
+skew-symmetric-term draws `γ` (`pairs` holds the `(i, j)`, `i < j` indices), the
+sampled variances `σ²γ`, and per-draw log-likelihoods.
+"""
+struct IntransitiveMCMCSamples
+    λ_samples::Matrix{Float64}        # n_samples × K
+    γ_samples::Matrix{Float64}        # n_samples × P
+    pairs::Vector{Tuple{Int, Int}}
+    σ²γ_samples::Vector{Float64}
+    loglikelihoods::Vector{Float64}
+    n_samples::Int
+    n_burnin::Int
+    thin::Int
+end

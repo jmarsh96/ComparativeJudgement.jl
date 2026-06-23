@@ -30,6 +30,18 @@ Each model comes in three variants:
 - **Covariates** (`BradleyTerryCovariates`, `ThurstoneCaseVCovariates`) —
   strengths modelled as a linear function of item covariates, `λᵢ = zᵢᵀβ`.
 
+Bradley–Terry has two further structural extensions:
+
+- **Rater heterogeneity** (`BradleyTerryRaterHeterogeneity`) — a mixture in which
+  rater `r` follows Bradley–Terry with reliability `q_r` and otherwise guesses,
+  `P(r judges i beats j) = q_r·logistic(λᵢ − λⱼ) + (1 − q_r)/2`, so unreliable
+  assessors are down-weighted and the `q_r` flag them. Takes per-rater
+  comparisons in a `RaterData`.
+- **Intransitivity** (`BradleyTerryIntransitive`) — a skew-symmetric per-pair
+  term `γᵢⱼ = −γⱼᵢ` added to the predictor,
+  `logit P(i beats j) = (λᵢ − λⱼ) + γᵢⱼ`, measuring how far the judgements depart
+  from a single transitive scale.
+
 ## Inference methods
 
 Every model and variant can be fitted by either method:
@@ -93,6 +105,19 @@ fit(BradleyTerryCovariates(), Bayesian(), cd, HorseshoePrior()) # shrinkage
 fit(BradleyTerryCovariates(), Bayesian(), cd, SpikeSlabPrior()) # selection + PIPs
 ```
 
+For rater heterogeneity, supply per-rater comparisons (winner, loser and rater
+labels, one entry per judgement) and read off the estimated reliabilities:
+
+```julia
+rd = RaterData(["A", "C", "B"], ["B", "A", "C"], ["r1", "r1", "r2"])  # winner, loser, rater
+rfit = fit(BradleyTerryRaterHeterogeneity(), MLE(), rd)
+rater_reliabilities(rfit)                                       # q_r per rater
+strengths(rfit)                                                # consensus scale
+
+ifit = fit(BradleyTerryIntransitive(), MLE(), data)            # plain PairwiseData
+intransitivity(ifit)                                           # skew-symmetric γ matrix
+```
+
 ## Documentation
 
 The [documentation](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/)
@@ -101,8 +126,12 @@ the [plain model](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/bradley
 (MLE and Bayesian), the
 [anchored model](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/anchored_bt/)
 (measure half the items and predict the rest, including group-averaged anchors),
-and the [covariate model](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/covariate_bt/)
-(MLE, stepwise selection and shrinkage / spike-and-slab priors). The
+the [covariate model](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/covariate_bt/)
+(MLE, stepwise selection and shrinkage / spike-and-slab priors), the
+[rater-heterogeneity model](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/rater_heterogeneity_bt/)
+(recovering rater reliabilities) and the
+[intransitive model](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/intransitivity_bt/)
+(detecting departures from a single scale). The
 [Thurstone Case V](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/thurstone_case_v/)
 model has matching [anchored](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/thurstone_case_v_anchored/)
 and [covariate](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/thurstone_case_v_covariates/)
