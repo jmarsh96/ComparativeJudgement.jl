@@ -36,14 +36,21 @@ The Plackett–Luce ranking model. Placeholder — no inference implemented yet.
 struct PlackettLuce <: RankingModel end
 
 """
-    ThurstoneCaseV(distribution)
+    ThurstoneCaseV(distribution=:normal)
 
-Thurstone's Case V pairwise comparison model. Placeholder — no inference
-implemented yet.
+Thurstone's Case V pairwise comparison model: each item has a latent strength λ
+and `P(i beats j) = Φ(λᵢ − λⱼ)`, the equal-variance, uncorrelated
+discriminal-process model with a probit link. Fit with [`MLE`](@ref) or
+[`Bayesian`](@ref) inference via [`fit`](@ref).
+
+`distribution` selects the discriminal-process distribution; only `:normal`
+(the Case V default) is currently implemented.
 """
 struct ThurstoneCaseV <: PairwiseModel
     distribution::Symbol
 end
+
+ThurstoneCaseV() = ThurstoneCaseV(:normal)
 
 """
     Anchored(model)
@@ -68,6 +75,15 @@ calibration model. See [`Anchored`](@ref) and [`fit`](@ref).
 """
 const BradleyTerryAnchored = Anchored{BradleyTerry}
 BradleyTerryAnchored() = Anchored(BradleyTerry())
+
+"""
+    ThurstoneCaseVAnchored()
+
+Alias for `Anchored(ThurstoneCaseV())`: the joint Thurstone Case V + linear
+calibration model. See [`Anchored`](@ref) and [`fit`](@ref).
+"""
+const ThurstoneCaseVAnchored = Anchored{ThurstoneCaseV}
+ThurstoneCaseVAnchored() = Anchored(ThurstoneCaseV())
 
 """
     InferenceMethod
@@ -313,6 +329,23 @@ struct AnchoredMCMCSamples
 end
 
 """
+    AnchoredMLEResult
+
+Maximum-likelihood fit of an [`Anchored`](@ref) model: the centred latent
+strengths λ, the calibration coefficients `a`, `b` and noise variance `σ²` of
+`y = a + b·λ + ε`, and the maximised joint log-likelihood. Query via
+[`strengths`](@ref), [`calibration`](@ref), [`predict`](@ref) and
+[`loglikelihood`](@ref).
+"""
+struct AnchoredMLEResult
+    λ::Vector{Float64}       # centred latent strengths
+    a::Float64              # calibration intercept
+    b::Float64              # calibration slope
+    σ²::Float64             # calibration noise variance
+    loglik::Float64         # maximised joint log-likelihood
+end
+
+"""
     FittedComparativeModel
 
 The result of [`fit`](@ref): bundles the model, the inference method, the
@@ -364,6 +397,17 @@ strengths are a linear function of item covariates, `λ_i = z_iᵀβ`, so that
 """
 const BradleyTerryCovariates = Covariates{BradleyTerry}
 BradleyTerryCovariates() = Covariates(BradleyTerry())
+
+"""
+    ThurstoneCaseVCovariates()
+
+Alias for `Covariates(ThurstoneCaseV())`: the Thurstone Case V model whose latent
+strengths are a linear function of item covariates, `λ_i = z_iᵀβ`, so that
+`probit P(i beats j) = Φ((z_i − z_j)ᵀβ)`. See [`Covariates`](@ref) and
+[`fit`](@ref).
+"""
+const ThurstoneCaseVCovariates = Covariates{ThurstoneCaseV}
+ThurstoneCaseVCovariates() = Covariates(ThurstoneCaseV())
 
 """
     StepwiseMLE(; direction=:both, criterion=:AIC)

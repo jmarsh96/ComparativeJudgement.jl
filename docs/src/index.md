@@ -9,18 +9,24 @@ fits comparative judgement models to pairwise comparison data: items are
 placed on a latent strength scale from the outcomes of head-to-head
 comparisons.
 
-The package currently implements the Bradley–Terry model with three
-workflows:
+The package implements two pairwise-comparison models — **Bradley–Terry**
+(logistic link, ``P(i \text{ beats } j) = \operatorname{logistic}(\lambda_i -
+\lambda_j)``) and **Thurstone Case V** (probit link, ``\Phi(\lambda_i -
+\lambda_j)``) — each with the same set of workflows:
 
 - **Maximum likelihood** — fast point estimates and rankings.
-- **Bayesian** — Pólya-Gamma augmented Gibbs sampling for full posterior
-  uncertainty.
-- **Anchored** — a joint model in which known measurements for a few items
-  calibrate the latent scale, so measurements can be predicted for all items.
+- **Bayesian** — Gibbs sampling for full posterior uncertainty (Pólya-Gamma
+  augmentation for Bradley–Terry, Albert–Chib truncated-normal augmentation for
+  Thurstone).
+- **Anchored** — known measurements for a few items calibrate the latent scale,
+  so measurements can be predicted for all items (MLE or Bayesian).
+- **Covariate** — latent strengths are explained by item covariates,
+  ``\lambda_i = z_i^\top\beta``, with MLE, stepwise selection, and Bayesian
+  shrinkage priors.
 
-See the [Bradley–Terry models](bradley_terry.md) tutorial for a worked
-example of all three on simulated data, and the [API reference](api.md) for
-the full interface.
+See the [Bradley–Terry](bradley_terry.md) and [Thurstone Case V](thurstone_case_v.md)
+tutorials for worked examples on simulated data, and the [API reference](api.md)
+for the full interface.
 
 ## Installation
 

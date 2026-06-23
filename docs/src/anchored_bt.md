@@ -12,10 +12,18 @@ y_i = a + b\,\lambda_i + \varepsilon_i, \qquad \varepsilon_i \sim N(0, \sigma^2)
 \quad i \in S,
 ```
 
-and fits everything **jointly** by Gibbs sampling: the comparisons inform all the
-``\lambda`` (Pólya-Gamma augmented Bradley–Terry), the anchors pin down the
-calibration ``(a, b, \sigma^2)``, and predictions for unanchored items land on the
-measurement scale.
+and can be fitted two ways:
+
+- **Bayesian** ([`Bayesian`](@ref)) — everything **jointly** by Gibbs sampling:
+  the comparisons inform all the ``\lambda`` (Pólya-Gamma augmented), the anchors
+  pin down ``(a, b, \sigma^2)``, and predictions for unanchored items land on the
+  measurement scale with full posterior uncertainty.
+- **Maximum likelihood** ([`MLE`](@ref)) — two-stage: the plain Bradley–Terry MLE
+  fixes the latent scale, then the anchors calibrate ``(a, b, \sigma^2)`` by
+  weighted least squares.
+
+Most of this page uses the Bayesian fit; the [MLE alternative](#Maximum-likelihood-calibration)
+is shown at the end.
 
 ## Simulating comparison data
 
@@ -195,6 +203,30 @@ follow exactly as before — every item still gets its own measurement estimate:
 preds_g = predict(fitted_groups)
 round.(preds_g[1:6], digits=2)
 ```
+
+## Maximum-likelihood calibration
+
+For a fast point estimate, fit with [`MLE`](@ref) instead of [`Bayesian`](@ref).
+The latent strengths come from the plain Bradley–Terry MLE, then the anchors are
+regressed on them by weighted least squares. [`calibration`](@ref) returns the
+fitted ``(a, b, \sigma^2)``:
+
+```@example anc
+fitted_mle = fit(BradleyTerryAnchored(), MLE(), adata)
+calibration(fitted_mle)
+```
+
+[`predict`](@ref) works as in the Bayesian fit — a point prediction per item, or a
+plug-in normal prediction interval when `prob` is given:
+
+```@example anc
+preds_mle = predict(fitted_mle)
+rmse_mle = sqrt(sum((preds_mle[held_out] .- y_true[held_out]).^2) / length(held_out))
+(round(rmse_mle, digits=3), predict(fitted_mle, "S30"; prob=0.9))
+```
+
+The point estimates closely track the Bayesian posterior means; the MLE simply
+omits the uncertainty quantification.
 
 !!! note "Identifiability and centering"
     The anchor likelihood only constrains the combination ``a + b\lambda``: shifting

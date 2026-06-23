@@ -52,3 +52,56 @@ function _norm_quantile(p::Float64)::Float64
                  ((((d[1]*q+d[2])*q+d[3])*q+d[4])*q+1.0)
     end
 end
+
+# ─── Probit helpers (shared by the Thurstone Case V model) ───────────────────
+#
+# `_normcdf` (Abramowitz & Stegun, in polya_gamma.jl) is only good to ~7.5e-8
+# absolute error, so it loses all precision in the deep lower tail where Φ(d)
+# itself is < 1e-7. The two helpers below switch to the asymptotic Mills-ratio
+# expansion Φ(d)/φ(d) = (1/|d|)(1 − 1/d² + 3/d⁴ − 15/d⁶ + …) for d < −4, which is
+# both accurate and cheap there.
+
+const _LOG_SQRT_2π = 0.9189385332046727   # 0.5·log(2π)
+const _INV_SQRT_2π = 0.3989422804014327   # 1/√(2π)
+
+# Lower-tail Mills ratio R(d) = Φ(d)/φ(d) for d < 0 via the asymptotic series.
+_mills_lower(d::Float64) = let d2 = d * d
+    (1.0 - 1.0 / d2 + 3.0 / d2^2 - 15.0 / d2^3) / (-d)
+end
+
+# Numerically stable log Φ(d).
+function _log_normcdf(d::Float64)::Float64
+    d < -4.0 && return -0.5 * d^2 - _LOG_SQRT_2π + log(_mills_lower(d))
+    return log(_normcdf(d))
+end
+
+# Inverse Mills ratio φ(d)/Φ(d): the per-observation score weight of the probit
+# log-likelihood. → −d as d → −∞.
+function _inv_mills(d::Float64)::Float64
+    d < -4.0 && return 1.0 / _mills_lower(d)
+    return (_INV_SQRT_2π * exp(-0.5 * d^2)) / _normcdf(d)
+end
+
+# Draw Z ~ N(0, 1) truncated to (a, ∞). Plain rejection when the bound is at or
+# below the mode; Robert's (1995) exponential-proposal rejection in the tail
+# (a > 0), which stays exact and efficient however extreme a is.
+function _randn_truncated_lower(rng::AbstractRNG, a::Float64)::Float64
+    if a <= 0.0
+        while true
+            z = randn(rng)
+            z > a && return z
+        end
+    end
+    λ = (a + sqrt(a^2 + 4.0)) / 2.0
+    while true
+        z = a + randexp(rng) / λ          # a + Exp(rate λ)
+        rand(rng) <= exp(-(z - λ)^2 / 2.0) && return z
+    end
+end
+
+# Draw X ~ N(μ, 1) truncated to (0, ∞) if `positive`, else to (−∞, 0). Used for
+# the Albert–Chib latent variables of the probit (Thurstone) Gibbs samplers.
+function _sample_truncated_normal(rng::AbstractRNG, μ::Float64, positive::Bool)::Float64
+    positive && return μ + _randn_truncated_lower(rng, -μ)
+    return -(-μ + _randn_truncated_lower(rng, μ))
+end

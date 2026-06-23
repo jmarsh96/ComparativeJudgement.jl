@@ -16,9 +16,16 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
-        "Bradley–Terry models" => "bradley_terry.md",
-        "Anchored models" => "anchored_bt.md",
-        "Covariate models" => "covariate_bt.md",
+        "Bradley–Terry" => [
+            "Bradley–Terry models" => "bradley_terry.md",
+            "Anchored models" => "anchored_bt.md",
+            "Covariate models" => "covariate_bt.md",
+        ],
+        "Thurstone Case V" => [
+            "Thurstone Case V models" => "thurstone_case_v.md",
+            "Anchored models" => "thurstone_case_v_anchored.md",
+            "Covariate models" => "thurstone_case_v_covariates.md",
+        ],
         "API reference" => "api.md",
     ],
 )
