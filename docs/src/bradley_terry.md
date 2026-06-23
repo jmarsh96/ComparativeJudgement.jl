@@ -16,11 +16,10 @@ This page fits the plain Bradley–Terry model two ways on one simulated dataset
   giving full posterior distributions, so you also get uncertainty for every
   strength and win probability.
 
-Three extensions build on it, each with its own page: the
+Two extensions build on it, each with its own page: the
 [anchored model](anchored_bt.md) calibrates the latent scale to real
-measurements, the [covariate model](covariate_bt.md) explains strengths with
-item covariates, and the [anchored covariate model](covariate_anchored_bt.md)
-combines both.
+measurements, and the [covariate model](covariate_bt.md) explains strengths with
+item covariates.
 
 ## Simulating comparison data
 

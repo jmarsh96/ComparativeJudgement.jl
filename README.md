@@ -26,11 +26,6 @@ workflows:
   function of item covariates, `λ_i = zᵢᵀβ`. Fit by MLE or Bayesian inference,
   with model selection via stepwise AIC/BIC (`StepwiseMLE`) or shrinkage /
   spike-and-slab priors (`HorseshoePrior`, `SpikeSlabPrior`).
-- **Anchored covariates** (`BradleyTerryCovariatesAnchored`) — the covariate and
-  anchored models composed: covariate-driven strengths *and* calibration to anchor
-  measurements, fit jointly. Supports the same MLE / Bayesian / selection workflows,
-  single-item or group-averaged anchors, and can predict a measurement for an item that
-  was never compared or measured, from its covariates alone.
 
 ## Installation
 
@@ -71,22 +66,6 @@ fit(BradleyTerryCovariates(), Bayesian(), cd, HorseshoePrior()) # shrinkage
 fit(BradleyTerryCovariates(), Bayesian(), cd, SpikeSlabPrior()) # selection + PIPs
 ```
 
-Combine covariates with anchor measurements to calibrate the latent scale and
-predict measurements for unseen items:
-
-```julia
-acd = AnchoredData(cd, ["A", "C"], [1.4, 3.7])      # measured items + values
-
-afit = fit(BradleyTerryCovariatesAnchored(), MLE(), acd)
-coefficients(afit)                                  # β
-calibration(afit)                                   # (a, b, σ²)
-predict(afit, [0.0, 1.0])                           # ŷ for a new item, from covariates
-
-# anchors can also be group averages — e.g. the mean measurement of a batch of items
-gad = AnchoredData(cd, [["A", "B"], ["C"]], [2.1, 3.7])
-fit(BradleyTerryCovariatesAnchored(), MLE(), gad)
-```
-
 ## Documentation
 
 The [documentation](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/)
@@ -96,7 +75,5 @@ fitting the MLE and Bayesian models to simulated data, an
 that measures half the items and predicts the measurements of the other half (and
 covers group-averaged anchors), a
 [covariate-model tutorial](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/covariate_bt/)
-covering MLE, stepwise selection and shrinkage / spike-and-slab priors, an
-[anchored-covariate tutorial](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/covariate_anchored_bt/)
-that combines the two and predicts measurements for unseen items, and a
+covering MLE, stepwise selection and shrinkage / spike-and-slab priors, and a
 full [API reference](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/api/).

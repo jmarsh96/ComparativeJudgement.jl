@@ -470,11 +470,6 @@ function CovariateData(data::PairwiseData, cols::Pair{Symbol, <:AbstractVector}.
     return CovariateData(data, Z, names)
 end
 
-# Anchor labels of a covariate dataset resolve against the underlying comparison
-# labels, letting `AnchoredData` wrap a `CovariateData` (the anchored covariate
-# model `Anchored{Covariates{…}}`).
-_anchor_target_labels(cd::CovariateData) = cd.data.labels
-
 """
     CovariateMLEResult
 
@@ -505,101 +500,6 @@ struct CovariateMCMCSamples
     β_samples::Matrix{Float64}        # n_samples × p
     loglikelihoods::Vector{Float64}
     inclusion::Union{Nothing, Matrix{Float64}}  # n_samples × p, spike-slab only
-    Z::Matrix{Float64}
-    names::Vector{Symbol}
-    n_samples::Int
-    n_burnin::Int
-    thin::Int
-end
-
-# ───────────────────── Anchored covariate models ──────────────────────────
-#
-# Composing the two wrappers: `Anchored{Covariates{BradleyTerry}}` puts an
-# anchor-measurement layer `y = a + b·λ + ε` on top of covariate-driven
-# strengths `λ_i = z_iᵀβ`. Because β is identified by the comparisons (constant
-# covariate columns are rejected), λ = Zβ has a determined location and is used
-# uncentred; the calibration `(a, b)` maps it onto the measurement scale, so the
-# fit can predict measurements for never-measured items from their covariates.
-
-"""
-    BradleyTerryCovariatesAnchored()
-
-Alias for `Anchored(Covariates(BradleyTerry()))`: the Bradley–Terry model whose
-strengths are a linear function of item covariates (`λ_i = z_iᵀβ`) *and* which is
-calibrated to anchor measurements `y = a + b·λ + ε` for a subset of items. Fit by
-[`MLE`](@ref), [`StepwiseMLE`](@ref) or [`Bayesian`](@ref) inference with an
-[`AnchoredData`](@ref) wrapping a [`CovariateData`](@ref). See [`Anchored`](@ref),
-[`Covariates`](@ref) and [`fit`](@ref).
-"""
-const BradleyTerryCovariatesAnchored = Anchored{Covariates{BradleyTerry}}
-BradleyTerryCovariatesAnchored() = Anchored(Covariates(BradleyTerry()))
-
-"""
-    AnchoredCovariatePrior(β_prior; calib_prior=NormalPrior(2), σ²_prior=InverseGammaPrior(2.0, 1.0))
-
-Priors for a [`Bayesian`](@ref) anchored covariate fit
-([`BradleyTerryCovariatesAnchored`](@ref)). `β_prior` is the shrinkage/selection
-prior on the covariate coefficients β — a [`NormalPrior`](@ref),
-[`HorseshoePrior`](@ref) or [`SpikeSlabPrior`](@ref) — `calib_prior` a bivariate
-[`NormalPrior`](@ref) on the calibration coefficients `(a, b)`, and `σ²_prior` an
-[`InverseGammaPrior`](@ref) on the anchor noise variance σ².
-"""
-struct AnchoredCovariatePrior{P <: AbstractPrior} <: AbstractPrior
-    β_prior::P
-    calib_prior::NormalPrior
-    σ²_prior::InverseGammaPrior
-    function AnchoredCovariatePrior(β_prior::P, calib_prior::NormalPrior,
-                                    σ²_prior::InverseGammaPrior) where {P <: AbstractPrior}
-        length(calib_prior.μ) == 2 || throw(DimensionMismatch(
-            "calib_prior must be bivariate (intercept and slope), got K=$(length(calib_prior.μ))"))
-        new{P}(β_prior, calib_prior, σ²_prior)
-    end
-end
-function AnchoredCovariatePrior(β_prior::AbstractPrior;
-                                calib_prior::NormalPrior=NormalPrior(2),
-                                σ²_prior::InverseGammaPrior=InverseGammaPrior(2.0, 1.0))
-    return AnchoredCovariatePrior(β_prior, calib_prior, σ²_prior)
-end
-
-"""
-    AnchoredCovariateMLEResult
-
-Result of an [`MLE`](@ref) or [`StepwiseMLE`](@ref) anchored covariate fit: the
-covariate coefficients `β` with covariance `vcov`, the calibration parameters
-`a`, `b`, `σ²`, the joint log-likelihood, the covariate matrix `Z` and `names`,
-the retained covariate indices (`selected`), and the selection `trace`.
-"""
-struct AnchoredCovariateMLEResult
-    β::Vector{Float64}
-    vcov::Matrix{Float64}
-    a::Float64
-    b::Float64
-    σ²::Float64
-    loglik::Float64
-    Z::Matrix{Float64}
-    names::Vector{Symbol}
-    selected::Vector{Int}
-    trace::Vector{NamedTuple}
-end
-
-"""
-    AnchoredCovariateMCMCSamples
-
-Posterior draws from a [`Bayesian`](@ref) anchored covariate fit: latent
-strengths `λ_samples` (`n_samples × K`, the raw `Zβ`), calibration coefficients
-`β_samples` (`n_samples × 2`, columns `a`, `b`), anchor variances `σ²_samples`,
-joint log-likelihoods, covariate coefficients `βcov_samples` (`n_samples × p`),
-and (for a [`SpikeSlabPrior`](@ref) only) the `inclusion` indicator draws. The
-`λ_samples`/`β_samples`/`σ²_samples` field names match
-[`AnchoredMCMCSamples`](@ref) so the anchored accessors apply directly.
-"""
-struct AnchoredCovariateMCMCSamples
-    λ_samples::Matrix{Float64}        # n_samples × K, raw Zβ
-    β_samples::Matrix{Float64}        # n_samples × 2 (columns a, b)
-    σ²_samples::Vector{Float64}
-    loglikelihoods::Vector{Float64}
-    βcov_samples::Matrix{Float64}     # n_samples × p, covariate coefficients
-    inclusion::Union{Nothing, Matrix{Float64}}
     Z::Matrix{Float64}
     names::Vector{Symbol}
     n_samples::Int
