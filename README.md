@@ -9,23 +9,42 @@ A Julia package for fitting comparative judgement models to pairwise
 comparison data: items are placed on a latent strength scale from the
 outcomes of head-to-head comparisons, rather than from absolute scores.
 
-The package currently implements the Bradley–Terry model with four
-workflows:
+## Models
+
+Two pairwise-comparison models are implemented, differing only in the link that
+maps the strength difference to a win probability:
+
+| Model | `P(i beats j)` | Constructor |
+| --- | --- | --- |
+| **Bradley–Terry** | `logistic(λᵢ − λⱼ)` (logit link) | `BradleyTerry()` |
+| **Thurstone Case V** | `Φ(λᵢ − λⱼ)` (probit link) | `ThurstoneCaseV()` |
+
+Each model comes in three variants:
+
+- **Plain** — one free latent strength per item.
+- **Anchored** (`BradleyTerryAnchored`, `ThurstoneCaseVAnchored`) — known
+  measurements `y = a + b·λ + ε` for a subset of items calibrate the latent
+  scale, so measurements can be predicted (with intervals) for items that were
+  never measured. Anchors may apply to a single item or to the *average* over a
+  group of items (e.g. the mean mark of a batch of scripts).
+- **Covariates** (`BradleyTerryCovariates`, `ThurstoneCaseVCovariates`) —
+  strengths modelled as a linear function of item covariates, `λᵢ = zᵢᵀβ`.
+
+## Inference methods
+
+Every model and variant can be fitted by either method:
 
 - **Maximum likelihood** (`MLE`) — fast point estimates of the latent
   strengths, good for ranking items.
-- **Bayesian** (`Bayesian`) — a Pólya-Gamma augmented Gibbs sampler giving
-  full posterior distributions, so every strength and win probability comes
-  with uncertainty.
-- **Anchored** (`BradleyTerryAnchored`) — a joint Bayesian model in which
-  known measurements `y = a + b·λ + ε` for a subset of items calibrate the
-  latent scale, so measurements can be predicted (with credible intervals)
-  for items that were never measured. Anchors may apply to a single item or to
-  the *average* over a group of items (e.g. the mean mark of a batch of scripts).
-- **Covariates** (`BradleyTerryCovariates`) — strengths modelled as a linear
-  function of item covariates, `λ_i = zᵢᵀβ`. Fit by MLE or Bayesian inference,
-  with model selection via stepwise AIC/BIC (`StepwiseMLE`) or shrinkage /
-  spike-and-slab priors (`HorseshoePrior`, `SpikeSlabPrior`).
+- **Bayesian** (`Bayesian`) — Gibbs sampling giving full posterior
+  distributions, so every strength and win probability comes with uncertainty.
+  Bradley–Terry uses Pólya-Gamma augmentation; Thurstone uses Albert–Chib
+  truncated-normal augmentation.
+
+For covariate models, the covariates can additionally be selected by greedy
+AIC/BIC stepwise search (`StepwiseMLE`) or by Bayesian shrinkage / variable
+selection priors (`HorseshoePrior`, `SpikeSlabPrior`, with posterior inclusion
+probabilities), alongside the default `NormalPrior`.
 
 ## Installation
 
@@ -49,6 +68,14 @@ strengths(fitted)                     # estimated latent strengths
 probability(fitted, "A", "C")         # P(A beats C)
 ```
 
+Swap in the probit Thurstone Case V model by changing the model argument — the
+data, accessors and inference methods are identical:
+
+```julia
+fit(ThurstoneCaseV(), MLE(), data)            # probit point estimates
+fit(ThurstoneCaseV(), Bayesian(), data)       # probit posterior draws
+```
+
 With item covariates, model the strengths as `λᵢ = zᵢᵀβ`:
 
 ```julia
@@ -69,11 +96,16 @@ fit(BradleyTerryCovariates(), Bayesian(), cd, SpikeSlabPrior()) # selection + PI
 ## Documentation
 
 The [documentation](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/)
-includes a [worked tutorial](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/bradley_terry/)
-fitting the MLE and Bayesian models to simulated data, an
-[anchored-model tutorial](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/anchored_bt/)
-that measures half the items and predicts the measurements of the other half (and
-covers group-averaged anchors), a
-[covariate-model tutorial](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/covariate_bt/)
-covering MLE, stepwise selection and shrinkage / spike-and-slab priors, and a
-full [API reference](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/api/).
+includes worked tutorials on simulated data for both models. For Bradley–Terry:
+the [plain model](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/bradley_terry/)
+(MLE and Bayesian), the
+[anchored model](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/anchored_bt/)
+(measure half the items and predict the rest, including group-averaged anchors),
+and the [covariate model](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/covariate_bt/)
+(MLE, stepwise selection and shrinkage / spike-and-slab priors). The
+[Thurstone Case V](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/thurstone_case_v/)
+model has matching [anchored](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/thurstone_case_v_anchored/)
+and [covariate](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/thurstone_case_v_covariates/)
+tutorials. See the full
+[API reference](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/api/) for
+the complete interface.
