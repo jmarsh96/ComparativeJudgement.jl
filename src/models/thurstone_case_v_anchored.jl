@@ -28,7 +28,7 @@ function fit(model::Anchored{ThurstoneCaseV}, method::MLE,
     λ .-= mean(λ)
     result = _anchored_mle_result(λ, loglikelihood(mle), data.anchor_groups, ng,
                                   data.anchor_values, sum_log_ng)
-    return FittedComparativeModel(model, method, result, pdata.labels,
+    return FittedComparativeModel(model, method, result, pdata.labels, data,
                                   mle.converged, mle.iterations)
 end
 
@@ -222,7 +222,7 @@ function fit(model::Anchored{ThurstoneCaseV}, method::Bayesian,
 
     result = AnchoredMCMCSamples(λ_samples, β_samples, σ²_samples, loglikelihoods,
                                  method.n_samples, method.n_burnin, method.thin)
-    return FittedComparativeModel(model, method, result, pdata.labels, true, total)
+    return FittedComparativeModel(model, method, result, pdata.labels, data, true, total)
 end
 
 function fit(model::Anchored{ThurstoneCaseV}, data::AnchoredData{PairwiseData{L}, L};

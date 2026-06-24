@@ -17,7 +17,7 @@ end
 # Per-item standard errors of the latent strengths, by fit type:
 #   Bayesian        → posterior standard deviation,
 #   covariate MLE   → delta-method SE from λ = Zβ and the coefficient covariance,
-#   plain BT/TCV MLE→ observed-information SE (finite-difference Hessian).
+#   plain BT/TCV MLE→ observed-information SE (from `_strength_vcov`, statsapi.jl).
 _lambda_se(f::FittedComparativeModel{M, Bayesian}) where {M} = posterior_std(f)
 
 function _lambda_se(f::FittedComparativeModel{M, I, CovariateMLEResult}) where {M <: Covariates, I}
@@ -28,59 +28,25 @@ function _lambda_se(f::FittedComparativeModel{M, I, CovariateMLEResult}) where {
     return sqrt.(max.(diag(V), 0.0))
 end
 
-# Central-difference Hessian of `f` at `x` (small dimension; reuses the fit's
-# own negative log-likelihood objective).
-function _hessian_fd(f, x::Vector{Float64}; h::Float64=1e-4)
-    n = length(x)
-    H = Matrix{Float64}(undef, n, n)
-    for i in 1:n, j in i:n
-        xpp = copy(x); xpp[i] += h; xpp[j] += h
-        xpm = copy(x); xpm[i] += h; xpm[j] -= h
-        xmp = copy(x); xmp[i] -= h; xmp[j] += h
-        xmm = copy(x); xmm[i] -= h; xmm[j] -= h
-        H[i, j] = (f(xpp) - f(xpm) - f(xmp) + f(xmm)) / (4 * h^2)
-        H[j, i] = H[i, j]
-    end
-    return H
-end
-
-# Observed-information SE of the centred strengths for a plain BT/TCV MLE fit.
-function _plain_lambda_se(f::FittedComparativeModel{M, MLE}, data::PairwiseData) where {M}
-    K = length(f.labels)
-    θ̂ = Optim.minimizer(f.result)                       # free params (item 1 fixed at 0)
-    negll = f.model isa BradleyTerry ? (x -> _bt_neg_loglik(x, data.wins)) :
-                                       (x -> _tcv_neg_loglik(x, data.wins))
-    H = _hessian_fd(negll, collect(float.(θ̂)))
-    Σfree = inv(Symmetric(H))                            # covariance of the free strengths
-    Σfull = zeros(K, K)
-    Σfull[2:K, 2:K] .= Σfree
-    C = Matrix{Float64}(I, K, K) .- fill(1.0 / K, K, K)  # centring projection
-    Σc = C * Σfull * C'
-    return sqrt.(max.(diag(Σc), 0.0))
-end
+_lambda_se(f::FittedComparativeModel{<:Union{BradleyTerry, ThurstoneCaseV}, MLE}) =
+    sqrt.(max.(diag(_strength_vcov(f)), 0.0))
 
 """
     ssr(fitted)
-    ssr(fitted, data)
 
 Scale separation reliability `(σ²λ − meanSE²)/σ²λ`: the proportion of the
 observed variance in the estimated strengths attributable to true differences
 between items rather than estimation error. Higher is better (the CJ literature
 treats ≥ 0.7 as adequate).
 
-The standard errors come from the posterior for a [`Bayesian`](@ref) fit and
-from the coefficient covariance for a covariate [`MLE`](@ref) fit (no `data`
-needed); for a plain Bradley–Terry/Thurstone `MLE` fit pass the `data` so the
-observed-information standard errors can be computed.
+The per-item standard errors come from the posterior for a [`Bayesian`](@ref)
+fit, the coefficient covariance for a covariate [`MLE`](@ref) fit, and the
+observed information for a plain Bradley–Terry/Thurstone `MLE` fit.
 
 SSR is a descriptive summary, not a model-selection criterion: it is inflated by
 adaptive pair selection and is in part an artefact of the design.
 """
-ssr(f::FittedComparativeModel{M, Bayesian}) where {M} = _ssr(strengths(f), _lambda_se(f))
-ssr(f::FittedComparativeModel{M, I, CovariateMLEResult}) where {M <: Covariates, I} =
-    _ssr(strengths(f), _lambda_se(f))
-ssr(f::FittedComparativeModel{M, MLE}, data::PairwiseData) where {M <: Union{BradleyTerry, ThurstoneCaseV}} =
-    _ssr(strengths(f), _plain_lambda_se(f, data))
+ssr(f::FittedComparativeModel) = _ssr(strengths(f), _lambda_se(f))
 
 # ─── Split-half reliability ──────────────────────────────────────────────────
 

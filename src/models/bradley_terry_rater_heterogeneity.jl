@@ -127,7 +127,7 @@ function fit(model::RaterHeterogeneity{BradleyTerry}, method::MLE,
     λ .-= mean(λ)
     q = [_sigmoid(θ[K + r]) for r in 1:M]
     result = RaterMLEResult(λ, q, data.raters, _rater_loglik(λ, q, cells))
-    return FittedComparativeModel(model, method, result, data.labels,
+    return FittedComparativeModel(model, method, result, data.labels, data,
                                   Optim.converged(res), Optim.iterations(res))
 end
 
@@ -252,7 +252,7 @@ function fit(model::RaterHeterogeneity{BradleyTerry}, method::Bayesian,
 
     result = RaterMCMCSamples(λ_samples, q_samples, data.raters, lls,
                               method.n_samples, method.n_burnin, method.thin)
-    return FittedComparativeModel(model, method, result, data.labels, true, total)
+    return FittedComparativeModel(model, method, result, data.labels, data, true, total)
 end
 
 function fit(model::RaterHeterogeneity{BradleyTerry}, method::Bayesian,
@@ -267,10 +267,6 @@ _rater_named(labels, vals) = (; (Symbol(string(labels[k])) => vals[k] for k in 1
 
 function strengths(fitted::FittedComparativeModel{<:RaterHeterogeneity, MLE, <:RaterMLEResult})
     return copy(fitted.result.λ)
-end
-
-function loglikelihood(fitted::FittedComparativeModel{<:RaterHeterogeneity, MLE, <:RaterMLEResult})
-    return fitted.result.loglik
 end
 
 function rater_reliabilities(fitted::FittedComparativeModel{<:RaterHeterogeneity, MLE, <:RaterMLEResult})
@@ -300,10 +296,6 @@ end
 
 function strengths(fitted::FittedComparativeModel{<:RaterHeterogeneity, Bayesian, <:RaterMCMCSamples})
     return posterior_mean(fitted)
-end
-
-function loglikelihood(fitted::FittedComparativeModel{<:RaterHeterogeneity, Bayesian, <:RaterMCMCSamples})
-    return fitted.result.loglikelihoods
 end
 
 function rater_reliabilities(fitted::FittedComparativeModel{<:RaterHeterogeneity, Bayesian, <:RaterMCMCSamples})

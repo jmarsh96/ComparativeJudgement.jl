@@ -45,7 +45,7 @@ model. `direction` is `:forward`, `:backward`, or `:both`; `criterion` is `:AIC`
 or `:BIC`. Greedily adds/removes covariates to optimise the information
 criterion, then refits the selected subset. The result records the selected
 covariate indices and the selection trace; query it with the usual accessors
-([`coefficients`](@ref), [`strengths`](@ref)).
+([`coef`](@ref), [`strengths`](@ref)).
 """
 struct StepwiseMLE <: InferenceMethod
     direction::Symbol

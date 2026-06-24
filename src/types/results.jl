@@ -1,18 +1,22 @@
 """
-    FittedComparativeModel
+    FittedComparativeModel <: StatsAPI.StatisticalModel
 
-The result of [`fit`](@ref): bundles the model, the inference method, the
-raw fitting result (an `Optim` result for [`MLE`](@ref), a posterior-draws
-container for [`Bayesian`](@ref)), the item labels, and convergence info.
-Query it with the accessor functions ([`strengths`](@ref),
-[`probability`](@ref), [`posterior_mean`](@ref), [`predict`](@ref), …)
-rather than via `result` directly.
+The result of [`fit`](@ref): bundles the model, the inference method, the raw
+fitting result (an `Optim` result for [`MLE`](@ref), a posterior-draws container
+for [`Bayesian`](@ref)), the item labels, the `data` the model was fit to, and
+convergence info. As a `StatisticalModel` it supports the StatsAPI interface
+([`coef`](@ref), [`vcov`](@ref), [`stderror`](@ref), [`confint`](@ref),
+[`loglikelihood`](@ref), [`dof`](@ref), [`nobs`](@ref), [`aic`](@ref),
+[`bic`](@ref), …) alongside the domain accessors ([`strengths`](@ref),
+[`probability`](@ref), [`posterior_mean`](@ref), [`predict`](@ref), …). Query it
+through these accessors rather than via `result` directly.
 """
-struct FittedComparativeModel{M <: AbstractComparativeModel, I <: InferenceMethod, R, L}
+struct FittedComparativeModel{M <: AbstractComparativeModel, I <: InferenceMethod, R, L, D} <: StatisticalModel
     model::M
     method::I
     result::R
     labels::Vector{L}
+    data::D
     converged::Bool
     iterations::Int
 end

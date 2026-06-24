@@ -72,7 +72,7 @@ function fit(model::ThurstoneCaseV, method::MLE, data::PairwiseData{L}) where {L
     g!(G, λ_free) = _tcv_neg_grad!(G, λ_free, wins)
     result = optimize(f, g!, zeros(n - 1), LBFGS())
     return FittedComparativeModel(
-        model, method, result, data.labels,
+        model, method, result, data.labels, data,
         Optim.converged(result), Optim.iterations(result),
     )
 end
@@ -87,10 +87,6 @@ end
 
 function fit(model::ThurstoneCaseV, wins::Matrix{Int}, labels::Vector{L}) where {L}
     return fit(model, MLE(), PairwiseData(wins, labels))
-end
-
-function loglikelihood(fitted::FittedComparativeModel{ThurstoneCaseV, MLE})
-    return -Optim.minimum(fitted.result)
 end
 
 function strengths(fitted::FittedComparativeModel{ThurstoneCaseV, MLE})
@@ -195,7 +191,7 @@ function fit(model::ThurstoneCaseV, method::Bayesian, data::PairwiseData{L},
     end
 
     result = BTMCMCSamples(samples, loglikelihoods, method.n_samples, method.n_burnin)
-    return FittedComparativeModel(model, method, result, data.labels, true, total)
+    return FittedComparativeModel(model, method, result, data.labels, data, true, total)
 end
 
 function fit(model::ThurstoneCaseV, method::Bayesian, data::PairwiseData{L};
@@ -222,10 +218,6 @@ function credible_interval(fitted::FittedComparativeModel{ThurstoneCaseV, Bayesi
     α = (1.0 - prob) / 2.0
     col = fitted.result.samples[:, k]
     return (quantile(col, α), quantile(col, 1.0 - α))
-end
-
-function loglikelihood(fitted::FittedComparativeModel{ThurstoneCaseV, Bayesian})
-    return fitted.result.loglikelihoods
 end
 
 function strengths(fitted::FittedComparativeModel{ThurstoneCaseV, Bayesian})

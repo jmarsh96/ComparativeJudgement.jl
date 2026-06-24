@@ -1,27 +1,8 @@
-"""
-    fit(model, [method], data, [prior]; kwargs...)
-
-Fit a comparative judgement `model` to `data` and return a
-[`FittedComparativeModel`](@ref).
-
-The inference `method` selects the estimation strategy ([`MLE`](@ref),
-[`StepwiseMLE`](@ref) or [`Bayesian`](@ref)); when omitted, each model picks a
-sensible default ([`MLE`](@ref) for [`BradleyTerry`](@ref) and
-[`Covariates`](@ref) models, [`Bayesian`](@ref) for [`Anchored`](@ref) models).
-Bayesian fits accept a prior and an `rng` keyword for reproducibility. Anchors in
-an [`AnchoredData`](@ref) may target a single item or the average over a group of
-items (variance `σ²/n_g` for a group of size `n_g`).
-"""
-function fit end
-
-"""
-    loglikelihood(fitted)
-
-Log-likelihood of the data under the fitted model. For [`MLE`](@ref) fits this
-is a scalar evaluated at the estimate; for [`Bayesian`](@ref) fits it is the
-vector of log-likelihood values, one per retained posterior draw.
-"""
-function loglikelihood end
+# Generic functions for the domain-specific accessors (declared here with
+# docstrings; each model file adds the methods). The StatsAPI generics — `fit`,
+# `loglikelihood`, `predict`, `coef`, `coefnames`, `vcov`, `stderror`, `confint`,
+# `dof`, `nobs`, `deviance`, `aic`, `bic`, `aicc` — are imported from StatsAPI and
+# extended in `src/statsapi.jl`.
 
 """
     probability(fitted, i, j)
@@ -39,38 +20,11 @@ function probability end
 Estimated latent strengths λ, one per item, in the order of `fitted.labels`.
 For [`MLE`](@ref) fits these are the point estimates (centred to sum to zero);
 for [`Bayesian`](@ref) fits this is the posterior mean, equivalent to
-[`posterior_mean`](@ref).
+[`posterior_mean`](@ref). See also [`coef`](@ref), which returns these strengths
+for the plain/anchored/rater/intransitive models and the coefficients β for a
+covariate model.
 """
 function strengths end
-
-"""
-    coefficients(fitted)
-
-Estimated covariate coefficients β of a [`Covariates`](@ref) fit, keyed by
-covariate name. Point estimates for [`MLE`](@ref)/[`StepwiseMLE`](@ref) fits
-(selected covariates only); posterior means for [`Bayesian`](@ref) fits.
-"""
-function coefficients end
-
-"""
-    coefficient_std(fitted)
-
-Uncertainty of the covariate coefficients β of a [`Covariates`](@ref) fit, keyed
-by covariate name: standard errors (from the inverse Fisher information) for
-[`MLE`](@ref)/[`StepwiseMLE`](@ref) fits, posterior standard deviations for
-[`Bayesian`](@ref) fits.
-"""
-function coefficient_std end
-
-"""
-    coefficient_intervals(fitted; level=0.95)
-
-Interval estimates for the covariate coefficients β of a [`Covariates`](@ref)
-fit, as a named tuple of `(lo, hi)` keyed by covariate name. These are Wald
-confidence intervals `β̂ ± z·SE` for [`MLE`](@ref)/[`StepwiseMLE`](@ref) fits and
-posterior credible intervals for [`Bayesian`](@ref) fits.
-"""
-function coefficient_intervals end
 
 """
     inclusion_probabilities(fitted)
@@ -106,20 +60,15 @@ item `k` from a [`Bayesian`](@ref) fit.
 function credible_interval end
 
 """
-    predict(fitted, k; prob=nothing, rng=Random.default_rng())
-    predict(fitted, label; prob=nothing, rng=Random.default_rng())
-    predict(fitted, z::AbstractVector; prob=nothing, rng=Random.default_rng())
-    predict(fitted)
+    mcmc_loglikelihoods(fitted)
 
-Posterior-predictive anchor measurements `y* = a + b·λ + ε` for an
-[`Anchored`](@ref) fit, on the scale of the anchor values.
-
-With an item index `k` or `label`, returns a vector of posterior-predictive
-draws, or the symmetric `prob` credible interval `(lo, hi)` when `prob` is
-given. With no item argument, returns the vector of posterior-predictive
-means for all items.
+The per-draw total log-likelihood trace of a [`Bayesian`](@ref) fit, one value
+per retained posterior draw — a sampler diagnostic. (Distinct from
+[`loglikelihood`](@ref)`(fitted)`, the scalar log-likelihood at the posterior
+mean, and [`loglikelihood`](@ref)`(fitted, :)`, the pointwise-over-observations
+vector.)
 """
-function predict end
+function mcmc_loglikelihoods end
 
 """
     calibration(fitted)

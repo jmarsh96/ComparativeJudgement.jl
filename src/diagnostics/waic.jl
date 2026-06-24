@@ -29,18 +29,15 @@ function Base.show(io::IO, r::WAICResult)
 end
 
 """
-    waic(fitted, data)
+    waic(fitted)
 
-Widely Applicable Information Criterion for a [`Bayesian`](@ref) `fitted` model
-on its `data`. Returns a [`WAICResult`](@ref). Errors for [`MLE`](@ref) fits
-(use [`aic`](@ref)/[`bic`](@ref)). Use [`waic`](@ref)/[`loo`](@ref) to compare
-Bayesian models on the same data — lower `waic` is better.
+Widely Applicable Information Criterion for a [`Bayesian`](@ref) `fitted` model.
+Returns a [`WAICResult`](@ref). Errors for [`MLE`](@ref) fits (use
+[`aic`](@ref)/[`bic`](@ref)). Use [`waic`](@ref)/[`loo`](@ref) to compare Bayesian
+models on the same data — lower `waic` is better.
 """
-function waic(fitted::FittedComparativeModel, data)
-    ll = pointwise_loglikelihood(fitted, data)
-    ll isa AbstractMatrix || throw(ArgumentError(
-        "WAIC requires a Bayesian fit with posterior draws; got a point estimate. " *
-        "Use `aic`/`bic` for an MLE fit."))
+function waic(fitted::FittedComparativeModel{M, Bayesian}) where {M <: AbstractComparativeModel}
+    ll = _loglik_draws(fitted)
     S, n = size(ll)
     elpd_i = Vector{Float64}(undef, n)
     p_i = Vector{Float64}(undef, n)
@@ -54,3 +51,6 @@ function waic(fitted::FittedComparativeModel, data)
     se = sqrt(n * var(elpd_i))
     return WAICResult(elpd, sum(p_i), -2.0 * elpd, se, elpd_i)
 end
+
+waic(::FittedComparativeModel{M, I}) where {M, I} = throw(ArgumentError(
+    "WAIC requires a Bayesian fit with posterior draws; use `aic`/`bic` for an MLE fit."))

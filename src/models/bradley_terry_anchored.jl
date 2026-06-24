@@ -92,7 +92,7 @@ function fit(model::Anchored{BradleyTerry}, method::MLE,
     λ .-= mean(λ)
     result = _anchored_mle_result(λ, loglikelihood(mle), data.anchor_groups, ng,
                                   data.anchor_values, sum_log_ng)
-    return FittedComparativeModel(model, method, result, pdata.labels,
+    return FittedComparativeModel(model, method, result, pdata.labels, data,
                                   mle.converged, mle.iterations)
 end
 
@@ -288,7 +288,7 @@ function fit(model::Anchored{BradleyTerry}, method::Bayesian,
 
     result = AnchoredMCMCSamples(λ_samples, β_samples, σ²_samples, loglikelihoods,
                                  method.n_samples, method.n_burnin, method.thin)
-    return FittedComparativeModel(model, method, result, pdata.labels, true, total)
+    return FittedComparativeModel(model, method, result, pdata.labels, data, true, total)
 end
 
 function fit(model::Anchored{BradleyTerry}, data::AnchoredData{PairwiseData{L}, L};
@@ -315,10 +315,6 @@ function credible_interval(fitted::FittedComparativeModel{<:Anchored, Bayesian},
     return (quantile(col, α), quantile(col, 1.0 - α))
 end
 
-function loglikelihood(fitted::FittedComparativeModel{<:Anchored, Bayesian})
-    return fitted.result.loglikelihoods
-end
-
 function strengths(fitted::FittedComparativeModel{<:Anchored, Bayesian})
     return posterior_mean(fitted)
 end
@@ -330,8 +326,17 @@ function calibration(fitted::FittedComparativeModel{<:Anchored, Bayesian})
             σ² = mean(res.σ²_samples))
 end
 
-# Posterior-predictive draws y* = a + b·λ_k + ε on the anchor measurement scale.
-# With prob given, returns the symmetric credible interval of y* instead.
+"""
+    predict(fitted, k; prob=nothing, rng=Random.default_rng())
+    predict(fitted, label; prob=nothing, rng=Random.default_rng())
+    predict(fitted)
+
+Posterior-predictive anchor measurements `y* = a + b·λ + ε` for an
+[`Anchored`](@ref) fit, on the scale of the anchor values. With an item index
+`k` or `label`, returns a vector of posterior-predictive draws, or the symmetric
+`prob` credible interval `(lo, hi)` when `prob` is given. With no item argument,
+returns the vector of posterior-predictive means for all items.
+"""
 function predict(fitted::FittedComparativeModel{<:Anchored, Bayesian}, k::Integer;
                  prob::Union{Nothing, Float64}=nothing,
                  rng::AbstractRNG=Random.default_rng())
@@ -361,10 +366,6 @@ end
 
 function strengths(fitted::FittedComparativeModel{<:Anchored, MLE, AnchoredMLEResult})
     return fitted.result.λ
-end
-
-function loglikelihood(fitted::FittedComparativeModel{<:Anchored, MLE, AnchoredMLEResult})
-    return fitted.result.loglik
 end
 
 function calibration(fitted::FittedComparativeModel{<:Anchored, MLE, AnchoredMLEResult})

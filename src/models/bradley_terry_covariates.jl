@@ -122,7 +122,7 @@ end
 
 Maximum-likelihood fit of the covariate Bradley–Terry model via L-BFGS: the
 comparison log-odds are `(z_i − z_j)ᵀβ`, so this is logistic regression on the
-covariate-difference design. [`coefficients`](@ref) returns the estimated β and
+covariate-difference design. [`coef`](@ref) returns the estimated β and
 [`strengths`](@ref) the recovered latent strengths `λ = Zβ`.
 """
 function fit(model::Covariates{BradleyTerry}, method::MLE, cd::CovariateData{L}) where {L}
@@ -133,7 +133,7 @@ function fit(model::Covariates{BradleyTerry}, method::MLE, cd::CovariateData{L})
     fr = _fit_covariate_mle(agg)
     result = CovariateMLEResult(fr.β, fr.vcov, fr.loglik, cd.Z, cd.names,
                                 collect(1:agg.p), NamedTuple[])
-    return FittedComparativeModel(model, method, result, cd.data.labels,
+    return FittedComparativeModel(model, method, result, cd.data.labels, cd,
                                   fr.converged, fr.iterations)
 end
 
@@ -153,7 +153,7 @@ Stepwise maximum-likelihood selection of covariates by AIC or BIC (see
 [`StepwiseMLE`](@ref)). Greedily adds and/or removes covariates until the
 information criterion can no longer be improved, then returns the fit of the
 selected subset. The selected indices and the search trace are recorded in the
-result; query with [`coefficients`](@ref) and [`strengths`](@ref).
+result; query with [`coef`](@ref) and [`strengths`](@ref).
 """
 function fit(model::Covariates{BradleyTerry}, method::StepwiseMLE, cd::CovariateData{L}) where {L}
     K = length(cd.data.labels)
@@ -205,7 +205,7 @@ function fit(model::Covariates{BradleyTerry}, method::StepwiseMLE, cd::Covariate
     end
 
     result = CovariateMLEResult(cur.β, cur.vcov, cur.loglik, cd.Z, cd.names, selected, trace)
-    return FittedComparativeModel(model, method, result, cd.data.labels, cur.converged, step)
+    return FittedComparativeModel(model, method, result, cd.data.labels, cd, cur.converged, step)
 end
 
 # ─── MLE / Stepwise accessors (dispatch on CovariateMLEResult) ───────────────
@@ -214,39 +214,6 @@ function strengths(fitted::FittedComparativeModel{M, I, CovariateMLEResult}) whe
     r = fitted.result
     λ = isempty(r.selected) ? zeros(size(r.Z, 1)) : r.Z[:, r.selected] * r.β
     return λ .- mean(λ)
-end
-
-"""
-    coefficients(fitted)
-
-Estimated covariate coefficients β of a [`Covariates`](@ref) fit, as a named
-tuple keyed by covariate name. For [`MLE`](@ref)/[`StepwiseMLE`](@ref) fits these
-are the point estimates (only the selected covariates); for [`Bayesian`](@ref)
-fits, the posterior means.
-"""
-function coefficients(fitted::FittedComparativeModel{M, I, CovariateMLEResult}) where {M <: Covariates, I}
-    r = fitted.result
-    return (; (r.names[r.selected] .=> r.β)...)
-end
-
-function coefficient_std(fitted::FittedComparativeModel{M, I, CovariateMLEResult}) where {M <: Covariates, I}
-    r = fitted.result
-    se = [sqrt(r.vcov[k, k]) for k in 1:length(r.β)]
-    return (; (r.names[r.selected] .=> se)...)
-end
-
-function coefficient_intervals(fitted::FittedComparativeModel{M, I, CovariateMLEResult};
-                               level::Float64=0.95) where {M <: Covariates, I}
-    0.0 < level < 1.0 || throw(ArgumentError("level must be in (0, 1), got $level"))
-    r = fitted.result
-    z = _norm_quantile(1.0 - (1.0 - level) / 2.0)
-    ints = [(r.β[k] - z * sqrt(r.vcov[k, k]), r.β[k] + z * sqrt(r.vcov[k, k]))
-            for k in 1:length(r.β)]
-    return (; (r.names[r.selected] .=> ints)...)
-end
-
-function loglikelihood(fitted::FittedComparativeModel{M, I, CovariateMLEResult}) where {M <: Covariates, I}
-    return fitted.result.loglik
 end
 
 function probability(fitted::FittedComparativeModel{M, I, CovariateMLEResult},
@@ -413,7 +380,7 @@ sampling of the coefficients β. `prior` is one of [`NormalPrior`](@ref) (defaul
 `NormalPrior(p)`), [`HorseshoePrior`](@ref) for global-local shrinkage, or
 [`SpikeSlabPrior`](@ref) for variable selection with posterior inclusion
 probabilities. The result holds posterior draws ([`CovariateMCMCSamples`](@ref));
-query with [`coefficients`](@ref), [`strengths`](@ref), [`posterior_mean`](@ref),
+query with [`coef`](@ref), [`strengths`](@ref), [`posterior_mean`](@ref),
 [`credible_interval`](@ref), [`inclusion_probabilities`](@ref).
 """
 function fit(model::Covariates{BradleyTerry}, method::Bayesian, cd::CovariateData{L},
@@ -426,7 +393,7 @@ function fit(model::Covariates{BradleyTerry}, method::Bayesian, cd::CovariateDat
     result = CovariateMCMCSamples(β_samples, lls, incl, cd.Z, cd.names,
                                   method.n_samples, method.n_burnin, method.thin)
     total = method.n_burnin + method.thin * method.n_samples
-    return FittedComparativeModel(model, method, result, cd.data.labels, true, total)
+    return FittedComparativeModel(model, method, result, cd.data.labels, cd, true, total)
 end
 
 function fit(model::Covariates{BradleyTerry}, method::Bayesian, cd::CovariateData{L};
@@ -461,32 +428,6 @@ end
 
 function strengths(fitted::FittedComparativeModel{M, Bayesian, CovariateMCMCSamples}) where {M <: Covariates}
     return posterior_mean(fitted)
-end
-
-function loglikelihood(fitted::FittedComparativeModel{M, Bayesian, CovariateMCMCSamples}) where {M <: Covariates}
-    return fitted.result.loglikelihoods
-end
-
-function coefficients(fitted::FittedComparativeModel{M, Bayesian, CovariateMCMCSamples}) where {M <: Covariates}
-    r = fitted.result
-    β̄ = vec(mean(r.β_samples, dims=1))
-    return (; (r.names .=> β̄)...)
-end
-
-function coefficient_std(fitted::FittedComparativeModel{M, Bayesian, CovariateMCMCSamples}) where {M <: Covariates}
-    r = fitted.result
-    sd = vec(std(r.β_samples, dims=1))
-    return (; (r.names .=> sd)...)
-end
-
-function coefficient_intervals(fitted::FittedComparativeModel{M, Bayesian, CovariateMCMCSamples};
-                               level::Float64=0.95) where {M <: Covariates}
-    0.0 < level < 1.0 || throw(ArgumentError("level must be in (0, 1), got $level"))
-    r = fitted.result
-    α = (1.0 - level) / 2.0
-    ints = [(quantile(r.β_samples[:, k], α), quantile(r.β_samples[:, k], 1.0 - α))
-            for k in 1:size(r.β_samples, 2)]
-    return (; (r.names .=> ints)...)
 end
 
 """

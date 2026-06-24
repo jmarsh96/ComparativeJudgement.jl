@@ -90,7 +90,7 @@ function fit(model::Intransitive{BradleyTerry}, method::MLE, data::PairwiseData{
     γ = θ[K:((K - 1) + agg.P)]
     ll = _intransitive_data_loglik(λ, γ, agg)
     result = IntransitiveMLEResult(λ, agg.pairs, γ, s²γ, ll)
-    return FittedComparativeModel(model, method, result, data.labels,
+    return FittedComparativeModel(model, method, result, data.labels, data,
                                   Optim.converged(res), Optim.iterations(res))
 end
 
@@ -193,7 +193,7 @@ function fit(model::Intransitive{BradleyTerry}, method::Bayesian, data::Pairwise
 
     result = IntransitiveMCMCSamples(λ_samples, γ_samples, agg.pairs, σ²γ_samples,
                                      lls, method.n_samples, method.n_burnin, method.thin)
-    return FittedComparativeModel(model, method, result, data.labels, true, total)
+    return FittedComparativeModel(model, method, result, data.labels, data, true, total)
 end
 
 function fit(model::Intransitive{BradleyTerry}, method::Bayesian, data::PairwiseData{L};
@@ -205,10 +205,6 @@ end
 
 function strengths(fitted::FittedComparativeModel{<:Intransitive, MLE, <:IntransitiveMLEResult})
     return copy(fitted.result.λ)
-end
-
-function loglikelihood(fitted::FittedComparativeModel{<:Intransitive, MLE, <:IntransitiveMLEResult})
-    return fitted.result.loglik
 end
 
 # γᵢⱼ for an ordered (i, j): +γ if (i,j) is a stored pair, −γ for (j,i), else 0.
@@ -262,10 +258,6 @@ end
 
 function strengths(fitted::FittedComparativeModel{<:Intransitive, Bayesian, IntransitiveMCMCSamples})
     return posterior_mean(fitted)
-end
-
-function loglikelihood(fitted::FittedComparativeModel{<:Intransitive, Bayesian, IntransitiveMCMCSamples})
-    return fitted.result.loglikelihoods
 end
 
 function intransitivity(fitted::FittedComparativeModel{<:Intransitive, Bayesian, IntransitiveMCMCSamples})

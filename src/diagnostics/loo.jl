@@ -41,19 +41,16 @@ function Base.show(io::IO, r::LOOResult)
 end
 
 """
-    loo(fitted, data)
+    loo(fitted)
 
 Pareto-smoothed importance-sampling leave-one-out cross-validation for a
-[`Bayesian`](@ref) `fitted` model on its `data`. Returns a [`LOOResult`](@ref)
-holding `elpd_loo`, `p_loo`, `looic`, and per-observation Pareto-`k` diagnostics.
-Errors for [`MLE`](@ref) fits. Compare Bayesian models on the same data by
-`elpd_loo` (higher) or `looic` (lower); check `pareto_k` for reliability.
+[`Bayesian`](@ref) `fitted` model. Returns a [`LOOResult`](@ref) holding
+`elpd_loo`, `p_loo`, `looic`, and per-observation Pareto-`k` diagnostics. Errors
+for [`MLE`](@ref) fits. Compare Bayesian models on the same data by `elpd_loo`
+(higher) or `looic` (lower); check `pareto_k` for reliability.
 """
-function loo(fitted::FittedComparativeModel, data)
-    ll = pointwise_loglikelihood(fitted, data)
-    ll isa AbstractMatrix || throw(ArgumentError(
-        "LOO requires a Bayesian fit with posterior draws; got a point estimate. " *
-        "Use `aic`/`bic` for an MLE fit."))
+function loo(fitted::FittedComparativeModel{M, Bayesian}) where {M <: AbstractComparativeModel}
+    ll = _loglik_draws(fitted)
     S, n = size(ll)
     elpd_i = Vector{Float64}(undef, n)
     pareto_k = Vector{Float64}(undef, n)
@@ -69,3 +66,6 @@ function loo(fitted::FittedComparativeModel, data)
     se = sqrt(n * var(elpd_i))
     return LOOResult(elpd, lpd_total - elpd, -2.0 * elpd, se, elpd_i, pareto_k)
 end
+
+loo(::FittedComparativeModel{M, I}) where {M, I} = throw(ArgumentError(
+    "LOO requires a Bayesian fit with posterior draws; use `aic`/`bic` for an MLE fit."))

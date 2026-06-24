@@ -32,21 +32,21 @@ end
 
 _default_name(f::FittedComparativeModel) = string(nameof(typeof(f.model)))
 
-_ic_value(f, data, ::Val{:aic}) = aic(f, data)
-_ic_value(f, data, ::Val{:bic}) = bic(f, data)
-_ic_value(f, data, ::Val{:waic}) = waic(f, data).waic
-_ic_value(f, data, ::Val{:loo}) = loo(f, data).looic
+_ic_value(f, ::Val{:aic}) = aic(f)
+_ic_value(f, ::Val{:bic}) = bic(f)
+_ic_value(f, ::Val{:waic}) = waic(f).waic
+_ic_value(f, ::Val{:loo}) = loo(f).looic
 
 """
-    compare(fits...; data, criterion=:loo, names=nothing)
+    compare(fits...; criterion=:loo, names=nothing)
 
-Tabulate competing `fits` (all fit to the same `data`) by an information
-criterion: `:aic` or `:bic` for [`MLE`](@ref) fits, `:waic` or `:loo` for
-[`Bayesian`](@ref) fits. Returns a [`ModelComparisonTable`](@ref) ordered
+Tabulate competing `fits` (each carrying the data it was fit to) by an
+information criterion: `:aic` or `:bic` for [`MLE`](@ref) fits, `:waic` or `:loo`
+for [`Bayesian`](@ref) fits. Returns a [`ModelComparisonTable`](@ref) ordered
 best-first, with `Δ` the gap from the best model. `names` optionally labels the
 rows (defaults to the model type names).
 """
-function compare(fits::FittedComparativeModel...; data, criterion::Symbol=:loo,
+function compare(fits::FittedComparativeModel...; criterion::Symbol=:loo,
                  names::Union{Nothing, Vector{String}}=nothing)
     criterion in (:aic, :bic, :waic, :loo) || throw(ArgumentError(
         "criterion must be :aic, :bic, :waic or :loo, got $criterion"))
@@ -54,7 +54,7 @@ function compare(fits::FittedComparativeModel...; data, criterion::Symbol=:loo,
     nm = names === nothing ? [_default_name(f) for f in fits] : names
     length(nm) == length(fits) || throw(DimensionMismatch(
         "got $(length(fits)) fits but $(length(nm)) names"))
-    vals = [_ic_value(f, data, Val(criterion)) for f in fits]
+    vals = [_ic_value(f, Val(criterion)) for f in fits]
     order = sortperm(vals)
     v = vals[order]
     return ModelComparisonTable(nm[order], criterion, v, v .- minimum(v))

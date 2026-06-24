@@ -83,7 +83,7 @@ end
 
 Maximum-likelihood fit of the covariate Thurstone Case V model via L-BFGS: the
 comparison link is `Φ((z_i − z_j)ᵀβ)`, so this is probit regression on the
-covariate-difference design. [`coefficients`](@ref) returns the estimated β and
+covariate-difference design. [`coef`](@ref) returns the estimated β and
 [`strengths`](@ref) the recovered latent strengths `λ = Zβ`.
 """
 function fit(model::Covariates{ThurstoneCaseV}, method::MLE, cd::CovariateData{L}) where {L}
@@ -94,7 +94,7 @@ function fit(model::Covariates{ThurstoneCaseV}, method::MLE, cd::CovariateData{L
     fr = _fit_tcvcov_mle(agg)
     result = CovariateMLEResult(fr.β, fr.vcov, fr.loglik, cd.Z, cd.names,
                                 collect(1:agg.p), NamedTuple[])
-    return FittedComparativeModel(model, method, result, cd.data.labels,
+    return FittedComparativeModel(model, method, result, cd.data.labels, cd,
                                   fr.converged, fr.iterations)
 end
 
@@ -108,7 +108,7 @@ end
 Stepwise maximum-likelihood selection of covariates by AIC or BIC for the probit
 Thurstone Case V model (see [`StepwiseMLE`](@ref)). Greedily adds and/or removes
 covariates until the information criterion can no longer be improved, then returns
-the fit of the selected subset; query with [`coefficients`](@ref) and
+the fit of the selected subset; query with [`coef`](@ref) and
 [`strengths`](@ref).
 """
 function fit(model::Covariates{ThurstoneCaseV}, method::StepwiseMLE, cd::CovariateData{L}) where {L}
@@ -161,7 +161,7 @@ function fit(model::Covariates{ThurstoneCaseV}, method::StepwiseMLE, cd::Covaria
     end
 
     result = CovariateMLEResult(cur.β, cur.vcov, cur.loglik, cd.Z, cd.names, selected, trace)
-    return FittedComparativeModel(model, method, result, cd.data.labels, cur.converged, step)
+    return FittedComparativeModel(model, method, result, cd.data.labels, cd, cur.converged, step)
 end
 
 # Thurstone-specific MLE/Stepwise probability (probit link). Strengths,
@@ -252,7 +252,7 @@ Gibbs sampling of the coefficients β. `prior` is one of [`NormalPrior`](@ref)
 (default `NormalPrior(p)`), [`HorseshoePrior`](@ref) for global-local shrinkage,
 or [`SpikeSlabPrior`](@ref) for variable selection with posterior inclusion
 probabilities. The result holds posterior draws ([`CovariateMCMCSamples`](@ref));
-query with [`coefficients`](@ref), [`strengths`](@ref), [`posterior_mean`](@ref),
+query with [`coef`](@ref), [`strengths`](@ref), [`posterior_mean`](@ref),
 [`credible_interval`](@ref), [`inclusion_probabilities`](@ref).
 """
 function fit(model::Covariates{ThurstoneCaseV}, method::Bayesian, cd::CovariateData{L},
@@ -265,7 +265,7 @@ function fit(model::Covariates{ThurstoneCaseV}, method::Bayesian, cd::CovariateD
     result = CovariateMCMCSamples(β_samples, lls, incl, cd.Z, cd.names,
                                   method.n_samples, method.n_burnin, method.thin)
     total = method.n_burnin + method.thin * method.n_samples
-    return FittedComparativeModel(model, method, result, cd.data.labels, true, total)
+    return FittedComparativeModel(model, method, result, cd.data.labels, cd, true, total)
 end
 
 function fit(model::Covariates{ThurstoneCaseV}, method::Bayesian, cd::CovariateData{L};
