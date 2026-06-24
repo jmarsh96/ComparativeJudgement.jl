@@ -97,8 +97,9 @@ Z = [0.0 1.0;                         # one row of covariates per item
 cd = CovariateData(data, Z, [:size, :age])
 
 cfit = fit(BradleyTerryCovariates(), MLE(), cd)                 # ML coefficients
-coefficients(cfit)                                              # point estimates β
-coefficient_intervals(cfit; level=0.95)                        # confidence intervals
+coef(cfit)                                                      # point estimates β (StatsAPI)
+coefnames(cfit)                                                 # covariate names
+confint(cfit; level=0.95)                                      # confidence intervals
 
 fit(BradleyTerryCovariates(), StepwiseMLE(criterion=:BIC), cd)  # stepwise selection
 fit(BradleyTerryCovariates(), Bayesian(), cd, HorseshoePrior()) # shrinkage
@@ -117,6 +118,33 @@ strengths(rfit)                                                # consensus scale
 ifit = fit(BradleyTerryIntransitive(), MLE(), data)            # plain PairwiseData
 intransitivity(ifit)                                           # skew-symmetric γ matrix
 ```
+
+## Model checking
+
+A fit is a [StatsAPI.jl](https://github.com/JuliaStats/StatsAPI.jl)
+`StatisticalModel` that stores the data it was fit to, so it plugs into the wider
+Julia statistics ecosystem and the diagnostics are model-only:
+
+```julia
+fit1 = fit(BradleyTerry(), MLE(), data)
+aic(fit1); bic(fit1); loglikelihood(fit1); dof(fit1); nobs(fit1)   # StatsAPI
+coef(fit1); coefnames(fit1); vcov(fit1); stderror(fit1); confint(fit1)
+
+fit2 = fit(BradleyTerry(), Bayesian(), data)
+waic(fit2); loo(fit2)                                  # Bayesian predictive criteria
+ssr(fit1)                                              # scale separation reliability
+split_half_reliability(BradleyTerry(), MLE(), data)    # estimate stability
+
+# Compare and stress-test competing models
+crossvalidate(BradleyTerry(), MLE(), data)             # k-fold predictive log loss
+rank_correlation(fit1, fit2)                           # do conclusions survive a model swap?
+compare(fit1, fit2; criterion=:aic)                    # information-criterion table
+```
+
+See the [Diagnostics](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/diagnostics/)
+and [Comparison](https://jmarsh96.github.io/ComparativeJudgement.jl/dev/comparison/)
+pages for the full set (WAIC/PSIS-LOO, likelihood-ratio test, decision-level
+agreement, …).
 
 ## Documentation
 

@@ -67,22 +67,22 @@ nothing # hide
 
 ```@example tcvc
 fitted = fit(ThurstoneCaseVCovariates(), MLE(), cd)
-coefficients(fitted)
+coefnames(fitted) .=> coef(fitted)
 ```
 
-[`coefficients`](@ref) returns ``\hat\beta`` keyed by covariate name — close to the
-true ``(1.5, -1.0, 0, 0, 0)``. [`coefficient_std`](@ref) gives standard errors
-(from the inverse Fisher information) and [`coefficient_intervals`](@ref) the Wald
-confidence intervals. Plotting the estimates with their 95% intervals separates the
+[`coef`](@ref) returns ``\hat\beta`` (aligned with [`coefnames`](@ref)) — close to
+the true ``(1.5, -1.0, 0, 0, 0)``. [`stderror`](@ref) gives standard errors (from
+the inverse Fisher information) and [`confint`](@ref) the Wald confidence intervals
+(a `k×2` matrix). Plotting the estimates with their 95% intervals separates the
 two signal covariates from the three noise ones:
 
 ```@example tcvc
 using Plots
 using Statistics: mean
 
-β̂   = collect(values(coefficients(fitted)))
-lohi = collect(values(coefficient_intervals(fitted; level=0.95)))
-lo, hi = first.(lohi), last.(lohi)
+β̂   = coef(fitted)
+ci  = confint(fitted; level=0.95)
+lo, hi = ci[:, 1], ci[:, 2]
 scatter(1:p, β̂; yerror=(β̂ .- lo, hi .- β̂), label="MLE, 95% CI",
         xticks=(1:p, string.(cd.names)), xlabel="covariate", ylabel="coefficient β",
         legend=:topright)
@@ -109,7 +109,7 @@ criterion (`:AIC` or `:BIC`), in direction `:forward`, `:backward`, or `:both`:
 ```@example tcvc
 selected = fit(ThurstoneCaseVCovariates(),
                StepwiseMLE(direction=:both, criterion=:BIC), cd)
-(coefficients(selected), selected.result.selected)
+(coefnames(selected) .=> coef(selected), selected.result.selected)
 ```
 
 BIC keeps only the two real covariates; the search path is in
@@ -123,13 +123,13 @@ A Bayesian fit returns posterior draws of ``\beta``. With the default
 ```@example tcvc
 method = Bayesian(n_samples=1500, n_burnin=500)
 bayes = fit(ThurstoneCaseVCovariates(), method, cd; rng=MersenneTwister(1))
-coefficient_intervals(bayes; level=0.95)
+confint(bayes; level=0.95)
 ```
 
 ```@example tcvc
-bm   = collect(values(coefficients(bayes)))
-lohi = collect(values(coefficient_intervals(bayes; level=0.95)))
-lo, hi = first.(lohi), last.(lohi)
+bm   = coef(bayes)
+ci   = confint(bayes; level=0.95)
+lo, hi = ci[:, 1], ci[:, 2]
 scatter(1:p, bm; yerror=(bm .- lo, hi .- bm), label="posterior mean, 95% CI",
         xticks=(1:p, string.(cd.names)), xlabel="covariate", ylabel="coefficient β")
 scatter!(1:p, β_true; marker=:x, markersize=7, color=:red, label="truth")
@@ -144,7 +144,7 @@ leaving large ones almost untouched:
 ```@example tcvc
 hs = fit(ThurstoneCaseVCovariates(), method, cd, HorseshoePrior();
          rng=MersenneTwister(2))
-coefficients(hs)
+coefnames(hs) .=> coef(hs)
 ```
 
 ### Spike-and-slab selection

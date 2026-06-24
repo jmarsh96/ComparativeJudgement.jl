@@ -115,7 +115,7 @@ tabulates them by the gap ``\Delta`` from the best model:
 ```@example cmp
 btb = fit(BradleyTerry(), Bayesian(n_samples=1500, n_burnin=500), data; rng=rng)
 thb = fit(ThurstoneCaseV(), Bayesian(n_samples=1500, n_burnin=500), data; rng=rng)
-compare(btb, thb; data=data, criterion=:loo, names=["Bradley–Terry", "Thurstone"])
+compare(btb, thb; criterion=:loo, names=["Bradley–Terry", "Thurstone"])
 ```
 
 A difference of a point or two between the link models is the expected, and

@@ -44,12 +44,12 @@ nothing # hide
 ## Information criteria (AIC / BIC)
 
 For maximum-likelihood fits, [`aic`](@ref) and [`bic`](@ref) trade goodness of
-fit against the number of parameters [`nparams`](@ref); [`nobs`](@ref) is the
-number of comparisons used in the BIC penalty. Lower is better.
+fit against the number of parameters [`dof`](@ref); [`nobs`](@ref) is the number
+of comparisons used in the BIC penalty. A fit is a `StatsAPI.StatisticalModel`,
+so these are model-only — the fit carries the data it was fit to. Lower is better.
 
 ```@example diag
-(aic = aic(mle, data), bic = bic(mle, data),
- nparams = nparams(mle), nobs = nobs(data))
+(aic = aic(mle), bic = bic(mle), dof = dof(mle), nobs = nobs(mle))
 ```
 
 AIC estimates out-of-sample predictive performance, BIC approximates a Bayes
@@ -61,17 +61,17 @@ maximum-likelihood fits only; for a [`Bayesian`](@ref) fit use [`waic`](@ref) or
 ## WAIC and PSIS-LOO
 
 For Bayesian fits, [`waic`](@ref) and [`loo`](@ref) estimate out-of-sample
-predictive accuracy from the pointwise log-likelihood
-([`pointwise_loglikelihood`](@ref)) without refitting. They report the expected
-log pointwise predictive density (`elpd`, higher is better) and an information
-criterion on the deviance scale (lower is better):
+predictive accuracy from the pointwise log-likelihood (`loglikelihood(fitted, :)`)
+without refitting. They report the expected log pointwise predictive density
+(`elpd`, higher is better) and an information criterion on the deviance scale
+(lower is better):
 
 ```@example diag
-waic(bayes, data)
+waic(bayes)
 ```
 
 ```@example diag
-loo(bayes, data)
+loo(bayes)
 ```
 
 [`loo`](@ref) uses Pareto-smoothed importance sampling and additionally returns a
@@ -85,10 +85,10 @@ closely, and both track the maximum-likelihood AIC on a well-behaved fit.
 observed variance in the estimated strengths attributable to true differences
 between items rather than to estimation error. The standard errors come from the
 posterior for a Bayesian fit, and from the observed information for a plain
-maximum-likelihood fit (so the data is passed):
+maximum-likelihood fit:
 
 ```@example diag
-(ssr_mle = ssr(mle, data), ssr_bayes = ssr(bayes))
+(ssr_mle = ssr(mle), ssr_bayes = ssr(bayes))
 ```
 
 The two routes agree closely. Treat SSR as a descriptive summary rather than a
