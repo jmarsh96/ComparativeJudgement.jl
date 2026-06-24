@@ -878,14 +878,16 @@ using LinearAlgebra: diag, dot
         return RaterData(ws, ls, wh)
     end
 
-    # Simulate data with a planted skew-symmetric intransitivity Γ.
+    # Simulate data with a planted skew-symmetric intransitivity Γ. Uses the
+    # expected (rounded) win counts rather than sampling, so the recovery is
+    # reproducible across Julia/RNG versions (`rng` is accepted but unused).
     function _simulate_intransitive_data(rng, K, λtrue, Γ; n_per_pair=25)
         wins = zeros(Int, K, K)
         for i in 1:K, j in (i + 1):K
             p = 1 / (1 + exp(-(λtrue[i] - λtrue[j] + Γ[i, j])))
-            for _ in 1:n_per_pair
-                rand(rng) < p ? (wins[i, j] += 1) : (wins[j, i] += 1)
-            end
+            w = round(Int, n_per_pair * p)
+            wins[i, j] = w
+            wins[j, i] = n_per_pair - w
         end
         return PairwiseData(wins, ["item" * lpad(i, 2, '0') for i in 1:K])
     end
@@ -934,7 +936,9 @@ using LinearAlgebra: diag, dot
         @test mean(qv[1:3]) > mean(qv[4:6]) + 0.3        # reliable raters stand out
 
         @test fit(BradleyTerryRaterHeterogeneity(), rd).converged    # default-method overload
-        @test probability(f, "item01", "item02") ≈ probability(f, 1, 2)
+        i1 = findfirst(==("item01"), f.labels)   # label order is data-dependent
+        i2 = findfirst(==("item02"), f.labels)
+        @test probability(f, "item01", "item02") ≈ probability(f, i1, i2)
         @test 0.0 < probability(f, 1, 2) < 1.0
         @test_throws ArgumentError probability(f, "item01", "nope")
         @test loglikelihood(f) <= 0.0
