@@ -170,7 +170,7 @@ using LinearAlgebra: diag, dot
         lb, ub = credible_interval(fitted, 1)
         @test lb < ub
 
-        ll = loglikelihood(fitted)
+        ll = mcmc_loglikelihoods(fitted)
         @test ll isa Vector{Float64}
         @test length(ll) == 500
         @test all(isfinite, ll)
@@ -361,7 +361,7 @@ using LinearAlgebra: diag, dot
         lb, ub = credible_interval(fitted, 1)
         @test lb < ub
 
-        ll = loglikelihood(fitted)
+        ll = mcmc_loglikelihoods(fitted)
         @test length(ll) == 600
         @test all(isfinite, ll)
     end
@@ -431,7 +431,7 @@ using LinearAlgebra: diag, dot
 
         f = fit(BradleyTerryCovariates(), MLE(), cd)
         @test f.converged
-        β̂ = collect(values(coefficients(f)))
+        β̂ = coef(f)
         @test isapprox(β̂, βtrue; atol=0.4)
 
         # strengths are λ = Zβ, centred to sum to zero
@@ -470,13 +470,13 @@ using LinearAlgebra: diag, dot
 
         f = fit(BradleyTerryCovariates(), Bayesian(n_samples=800, n_burnin=300),
                 cd; rng=MersenneTwister(1))
-        β̂ = collect(values(coefficients(f)))
+        β̂ = coef(f)
         @test isapprox(β̂, βtrue; atol=0.4)
         @test length(strengths(f)) == 35
         @test length(posterior_std(f)) == 35
         lo, hi = credible_interval(f, 1)
         @test lo < hi
-        @test loglikelihood(f) isa Vector{Float64}
+        @test mcmc_loglikelihoods(f) isa Vector{Float64}
         @test 0.0 < probability(f, 1, 2) < 1.0
     end
 
@@ -492,37 +492,36 @@ using LinearAlgebra: diag, dot
 
         # MLE: Wald confidence intervals from the Fisher information
         f = fit(BradleyTerryCovariates(), MLE(), cd)
-        se = coefficient_std(f)
-        ci = coefficient_intervals(f; level=0.95)
-        @test keys(se) == (:x1, :x2, :x3)
-        @test all(values(se) .> 0)
-        β̂ = coefficients(f)
-        for k in keys(ci)
-            lo, hi = ci[k]
-            @test lo < β̂[k] < hi                       # estimate inside its interval
+        se = stderror(f)
+        ci = confint(f; level=0.95)
+        @test coefnames(f) == ["x1", "x2", "x3"]
+        @test all(se .> 0)
+        β̂ = coef(f)
+        for k in 1:length(β̂)
+            @test ci[k, 1] < β̂[k] < ci[k, 2]           # estimate inside its interval
         end
-        @test ci.x1[1] > 0 && ci.x2[2] < 0             # signal CIs exclude zero
-        @test ci.x3[1] < 0 < ci.x3[2]                  # null CI covers zero
+        @test ci[1, 1] > 0 && ci[2, 2] < 0             # signal CIs exclude zero
+        @test ci[3, 1] < 0 < ci[3, 2]                  # null CI covers zero
         # wider level ⇒ wider interval
-        ci99 = coefficient_intervals(f; level=0.99)
-        @test (ci99.x1[2] - ci99.x1[1]) > (ci.x1[2] - ci.x1[1])
-        @test_throws ArgumentError coefficient_intervals(f; level=1.5)
+        ci99 = confint(f; level=0.99)
+        @test (ci99[1, 2] - ci99[1, 1]) > (ci[1, 2] - ci[1, 1])
+        @test_throws ArgumentError confint(f; level=1.5)
 
         # Bayesian: posterior credible intervals
         fb = fit(BradleyTerryCovariates(), Bayesian(n_samples=800, n_burnin=300),
                  cd; rng=MersenneTwister(11))
-        cib = coefficient_intervals(fb; level=0.9)
-        sdb = coefficient_std(fb)
-        @test all(values(sdb) .> 0)
-        for k in keys(cib)
-            lo, hi = cib[k]
-            @test lo < coefficients(fb)[k] < hi
+        cib = confint(fb; level=0.9)
+        sdb = stderror(fb)
+        β̂b = coef(fb)
+        @test all(sdb .> 0)
+        for k in 1:length(β̂b)
+            @test cib[k, 1] < β̂b[k] < cib[k, 2]
         end
-        @test cib.x1[1] > 0 && cib.x2[2] < 0           # signal credible intervals exclude zero
+        @test cib[1, 1] > 0 && cib[2, 2] < 0           # signal credible intervals exclude zero
 
         # selection carries through: intervals only for retained covariates
         fs = fit(BradleyTerryCovariates(), StepwiseMLE(criterion=:BIC), cd)
-        @test keys(coefficient_intervals(fs)) == keys(coefficients(fs))
+        @test size(confint(fs), 1) == length(coef(fs)) == length(coefnames(fs))
     end
 
     @testset "Horseshoe shrinks null coefficients" begin
@@ -532,7 +531,7 @@ using LinearAlgebra: diag, dot
 
         f = fit(BradleyTerryCovariates(), Bayesian(n_samples=800, n_burnin=400),
                 cd, HorseshoePrior(); rng=MersenneTwister(5))
-        β̂ = collect(values(coefficients(f)))
+        β̂ = coef(f)
         @test abs(β̂[1]) > 1.0                       # signal survives
         @test all(abs.(β̂[2:4]) .< 0.4)              # nulls shrunk toward zero
         @test abs(β̂[1]) > maximum(abs.(β̂[2:4]))
@@ -562,7 +561,7 @@ using LinearAlgebra: diag, dot
 
         f = fit(BradleyTerryCovariates(), StepwiseMLE(direction=:both, criterion=:BIC), cd)
         @test sort(f.result.selected) == [1, 2]     # picks the two real covariates
-        @test length(coefficients(f)) == 2
+        @test length(coef(f)) == 2
         @test !isempty(f.result.trace)
 
         # forward and backward also reach the right subset here
@@ -670,7 +669,7 @@ using LinearAlgebra: diag, dot
         @test all(>(0), posterior_std(fitted))
         lb, ub = credible_interval(fitted, 1)
         @test lb < ub
-        ll = loglikelihood(fitted)
+        ll = mcmc_loglikelihoods(fitted)
         @test ll isa Vector{Float64} && length(ll) == 500 && all(isfinite, ll)
         @test strengths(fitted) == posterior_mean(fitted)
     end
@@ -753,7 +752,7 @@ using LinearAlgebra: diag, dot
         p = probability(f, n, 1)
         @test p > 0.5
         @test probability(f, 1, n) ≈ 1 - p atol=1e-10
-        @test length(loglikelihood(f)) == 600
+        @test length(mcmc_loglikelihoods(f)) == 600
     end
 
     @testset "BradleyTerryAnchored — MLE recovery" begin
@@ -791,7 +790,7 @@ using LinearAlgebra: diag, dot
         cd, λtrue = _simulate_thurstone_covariate_data(rng, 45, βtrue; n_per_pair=16)
         f = fit(ThurstoneCaseVCovariates(), MLE(), cd)
         @test f.converged
-        @test isapprox(collect(values(coefficients(f))), βtrue; atol=0.4)
+        @test isapprox(coef(f), βtrue; atol=0.4)
         λ̂ = strengths(f)
         @test sum(λ̂) ≈ 0.0 atol=1e-8
         @test cor(λ̂, λtrue) > 0.95
@@ -818,14 +817,14 @@ using LinearAlgebra: diag, dot
         cd, _ = _simulate_thurstone_covariate_data(rng, 40, βtrue; n_per_pair=16)
         f = fit(ThurstoneCaseVCovariates(), Bayesian(n_samples=800, n_burnin=300),
                 cd; rng=MersenneTwister(1))
-        @test isapprox(collect(values(coefficients(f))), βtrue; atol=0.4)
+        @test isapprox(coef(f), βtrue; atol=0.4)
         @test length(strengths(f)) == 40
         lo, hi = credible_interval(f, 1)
         @test lo < hi
-        @test loglikelihood(f) isa Vector{Float64}
+        @test mcmc_loglikelihoods(f) isa Vector{Float64}
         @test 0.0 < probability(f, 1, 2) < 1.0
-        cib = coefficient_intervals(f; level=0.9)
-        @test cib.x1[1] > 0 && cib.x2[2] < 0
+        cib = confint(f; level=0.9)
+        @test cib[1, 1] > 0 && cib[2, 2] < 0
     end
 
     @testset "Covariate ThurstoneCaseV Horseshoe & Spike-slab" begin
@@ -835,7 +834,7 @@ using LinearAlgebra: diag, dot
 
         fh = fit(ThurstoneCaseVCovariates(), Bayesian(n_samples=800, n_burnin=400),
                  cd, HorseshoePrior(); rng=MersenneTwister(5))
-        β̂ = collect(values(coefficients(fh)))
+        β̂ = coef(fh)
         @test minimum(abs.(β̂[1:2])) > 1.0
         @test all(abs.(β̂[3:4]) .< 0.5)
 
@@ -852,7 +851,7 @@ using LinearAlgebra: diag, dot
         cd, _ = _simulate_thurstone_covariate_data(rng, 50, βtrue; n_per_pair=18)
         f = fit(ThurstoneCaseVCovariates(), StepwiseMLE(direction=:both, criterion=:BIC), cd)
         @test sort(f.result.selected) == [1, 2]
-        @test length(coefficients(f)) == 2
+        @test length(coef(f)) == 2
         @test !isempty(f.result.trace)
     end
 
@@ -955,7 +954,7 @@ using LinearAlgebra: diag, dot
         @test cor(posterior_mean(f), λtrue) > 0.8
         lo, hi = credible_interval(f, 1)
         @test lo < hi
-        @test loglikelihood(f) isa Vector{Float64}
+        @test mcmc_loglikelihoods(f) isa Vector{Float64}
         qv = collect(values(rater_reliabilities(f)))
         @test all(0.0 .<= qv .<= 1.0)
         @test mean(qv[1:2]) > mean(qv[3:4]) + 0.2
@@ -1011,7 +1010,7 @@ using LinearAlgebra: diag, dot
         @test length(posterior_std(f)) == K
         lo, hi = credible_interval(f, 1)
         @test lo < hi
-        @test loglikelihood(f) isa Vector{Float64}
+        @test mcmc_loglikelihoods(f) isa Vector{Float64}
         Γ̄ = intransitivity(f)
         @test maximum(abs.(Γ̄ .+ transpose(Γ̄))) < 1e-10
         cyc = [abs(Γ̄[6, 7]), abs(Γ̄[7, 8]), abs(Γ̄[6, 8])]
@@ -1035,50 +1034,56 @@ using LinearAlgebra: diag, dot
         return PairwiseData(wins, ["it$i" for i in 1:K]), λ
     end
 
-    @testset "nparams / nobs" begin
+    @testset "StatsAPI conformance: dof / nobs / coef" begin
         rng = MersenneTwister(1)
         data, _ = _simulate_separable(rng, 6)
         bt = fit(BradleyTerry(), MLE(), data)
-        @test nparams(bt) == 5            # K - 1
-        @test nobs(data) == sum(data.wins)
+        @test bt isa ComparativeJudgement.StatsAPI.StatisticalModel
+        @test dof(bt) == 5                # K - 1
+        @test nobs(bt) == sum(data.wins)
+        @test coef(bt) == strengths(bt)   # strengths are the BT coefficients
+        @test coefnames(bt) == string.(data.labels)
         cd, _ = _simulate_covariate_data(rng, 6, [1.0, -1.0])
         cm = fit(BradleyTerryCovariates(), MLE(), cd)
-        @test nparams(cm) == 2
-        @test nobs(cd) == sum(cd.data.wins)
+        @test dof(cm) == 2
+        @test nobs(cm) == sum(cd.data.wins)
+        @test length(coef(cm)) == 2 && coefnames(cm) == ["x1", "x2"]
     end
 
-    @testset "pointwise_loglikelihood" begin
+    @testset "loglikelihood scalar + pointwise" begin
         rng = MersenneTwister(2)
         data, _ = _simulate_separable(rng, 5)
         bt = fit(BradleyTerry(), MLE(), data)
-        pw = pointwise_loglikelihood(bt, data)
+        pw = loglikelihood(bt, :)
         @test pw isa Vector
-        @test sum(pw) ≈ loglikelihood(bt) atol = 1e-8     # data loglik
+        @test sum(pw) ≈ loglikelihood(bt) atol = 1e-8       # StatsAPI identity
         bayes = fit(BradleyTerry(), Bayesian(n_samples=200, n_burnin=100), data; rng=rng)
-        pwb = pointwise_loglikelihood(bayes, data)
-        @test size(pwb, 1) == 200
-        @test all(isfinite, pwb)
+        @test loglikelihood(bayes, :) isa Vector
+        @test sum(loglikelihood(bayes, :)) ≈ loglikelihood(bayes) atol = 1e-8
+        @test length(mcmc_loglikelihoods(bayes)) == 200     # per-draw trace
+        @test_throws ArgumentError mcmc_loglikelihoods(bt)
     end
 
     @testset "AIC / BIC" begin
         rng = MersenneTwister(3)
         data, _ = _simulate_separable(rng, 7)
         bt = fit(BradleyTerry(), MLE(), data)
-        @test aic(bt, data) ≈ -2 * loglikelihood(bt) + 2 * nparams(bt) atol = 1e-6
-        @test bic(bt, data) ≈ -2 * loglikelihood(bt) + log(nobs(data)) * nparams(bt) atol = 1e-6
-        @test deviance(bt, data) ≈ -2 * loglikelihood(bt) atol = 1e-6
+        @test aic(bt) ≈ -2 * loglikelihood(bt) + 2 * dof(bt) atol = 1e-6
+        @test bic(bt) ≈ -2 * loglikelihood(bt) + log(nobs(bt)) * dof(bt) atol = 1e-6
+        @test deviance(bt) ≈ -2 * loglikelihood(bt) atol = 1e-6
+        @test isfinite(aicc(bt))
         # Bayesian fits are redirected to waic/loo.
         bayes = fit(BradleyTerry(), Bayesian(n_samples=100, n_burnin=50), data; rng=rng)
-        @test_throws ArgumentError aic(bayes, data)
-        @test_throws ArgumentError bic(bayes, data)
+        @test_throws ArgumentError aic(bayes)
+        @test_throws ArgumentError bic(bayes)
     end
 
     @testset "WAIC / LOO" begin
         rng = MersenneTwister(4)
         data, _ = _simulate_separable(rng, 8)
         bayes = fit(BradleyTerry(), Bayesian(n_samples=800, n_burnin=400), data; rng=rng)
-        w = waic(bayes, data)
-        l = loo(bayes, data)
+        w = waic(bayes)
+        l = loo(bayes)
         @test w isa WAICResult && l isa LOOResult
         @test isfinite(w.elpd_waic) && isfinite(l.elpd_loo)
         @test w.p_waic > 0 && l.p_loo > 0
@@ -1088,21 +1093,21 @@ using LinearAlgebra: diag, dot
         @test abs(w.elpd_waic - l.elpd_loo) < 2.0       # close on a well-behaved fit
         # MLE fits have no posterior draws.
         mle = fit(BradleyTerry(), MLE(), data)
-        @test_throws ArgumentError waic(mle, data)
-        @test_throws ArgumentError loo(mle, data)
+        @test_throws ArgumentError waic(mle)
+        @test_throws ArgumentError loo(mle)
     end
 
     @testset "SSR" begin
         rng = MersenneTwister(5)
         data, _ = _simulate_separable(rng, 8; npp=16)
         bt = fit(BradleyTerry(), MLE(), data)
-        s_mle = ssr(bt, data)
+        s_mle = ssr(bt)
         @test 0.0 < s_mle < 1.0
         @test s_mle > 0.8                                  # strongly separated items
         bayes = fit(BradleyTerry(), Bayesian(n_samples=600, n_burnin=300), data; rng=rng)
         @test abs(ssr(bayes) - s_mle) < 0.05               # posterior SD ≈ observed-info SE
         th = fit(ThurstoneCaseV(), MLE(), data)
-        @test 0.0 < ssr(th, data) < 1.0
+        @test 0.0 < ssr(th) < 1.0
     end
 
     @testset "split-half reliability" begin
@@ -1119,11 +1124,11 @@ using LinearAlgebra: diag, dot
         rng = MersenneTwister(7)
         data, _ = _simulate_separable(rng, 6)
         tr, te = train_test_split(data; frac=0.7, rng=rng)
-        @test nobs(tr) + nobs(te) == nobs(data)            # partition conserves comparisons
+        @test sum(tr.wins) + sum(te.wins) == sum(data.wins)  # partition conserves comparisons
         @test tr.labels == data.labels
         folds = kfold(data; k=5, rng=rng)
         @test length(folds) == 5
-        @test sum(nobs(te) for (_, te) in folds) == nobs(data)
+        @test sum(sum(te.wins) for (_, te) in folds) == sum(data.wins)
     end
 
     @testset "cross-validated log loss" begin
@@ -1198,13 +1203,13 @@ using LinearAlgebra: diag, dot
         data, _ = _simulate_separable(rng, 8)
         btb = fit(BradleyTerry(), Bayesian(n_samples=500, n_burnin=250), data; rng=rng)
         thb = fit(ThurstoneCaseV(), Bayesian(n_samples=500, n_burnin=250), data; rng=rng)
-        tbl = compare(btb, thb; data=data, criterion=:loo, names=["BT", "TCV"])
+        tbl = compare(btb, thb; criterion=:loo, names=["BT", "TCV"])
         @test tbl isa ModelComparisonTable
         @test length(tbl.values) == 2
         @test tbl.Δ[1] == 0.0                              # best model first
         @test issorted(tbl.values)
         @test all(tbl.Δ .>= 0.0)
-        @test_throws ArgumentError compare(btb, thb; data=data, criterion=:bogus)
+        @test_throws ArgumentError compare(btb, thb; criterion=:bogus)
     end
 
 end
