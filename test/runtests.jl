@@ -1020,4 +1020,191 @@ using LinearAlgebra: diag, dot
         @test all(f.result.σ²γ_samples .> 0)
     end
 
+    # ─── Model checking: diagnostics and comparison ──────────────────────────
+
+    # Separable pairwise data on K items with `npp` comparisons per pair.
+    function _simulate_separable(rng, K; npp=12, spread=2.5)
+        λ = collect(range(spread, -spread, length=K))
+        wins = zeros(Int, K, K)
+        for i in 1:K, j in (i + 1):K
+            p = 1.0 / (1.0 + exp(-(λ[i] - λ[j])))
+            for _ in 1:npp
+                rand(rng) < p ? (wins[i, j] += 1) : (wins[j, i] += 1)
+            end
+        end
+        return PairwiseData(wins, ["it$i" for i in 1:K]), λ
+    end
+
+    @testset "nparams / nobs" begin
+        rng = MersenneTwister(1)
+        data, _ = _simulate_separable(rng, 6)
+        bt = fit(BradleyTerry(), MLE(), data)
+        @test nparams(bt) == 5            # K - 1
+        @test nobs(data) == sum(data.wins)
+        cd, _ = _simulate_covariate_data(rng, 6, [1.0, -1.0])
+        cm = fit(BradleyTerryCovariates(), MLE(), cd)
+        @test nparams(cm) == 2
+        @test nobs(cd) == sum(cd.data.wins)
+    end
+
+    @testset "pointwise_loglikelihood" begin
+        rng = MersenneTwister(2)
+        data, _ = _simulate_separable(rng, 5)
+        bt = fit(BradleyTerry(), MLE(), data)
+        pw = pointwise_loglikelihood(bt, data)
+        @test pw isa Vector
+        @test sum(pw) ≈ loglikelihood(bt) atol = 1e-8     # data loglik
+        bayes = fit(BradleyTerry(), Bayesian(n_samples=200, n_burnin=100), data; rng=rng)
+        pwb = pointwise_loglikelihood(bayes, data)
+        @test size(pwb, 1) == 200
+        @test all(isfinite, pwb)
+    end
+
+    @testset "AIC / BIC" begin
+        rng = MersenneTwister(3)
+        data, _ = _simulate_separable(rng, 7)
+        bt = fit(BradleyTerry(), MLE(), data)
+        @test aic(bt, data) ≈ -2 * loglikelihood(bt) + 2 * nparams(bt) atol = 1e-6
+        @test bic(bt, data) ≈ -2 * loglikelihood(bt) + log(nobs(data)) * nparams(bt) atol = 1e-6
+        @test deviance(bt, data) ≈ -2 * loglikelihood(bt) atol = 1e-6
+        # Bayesian fits are redirected to waic/loo.
+        bayes = fit(BradleyTerry(), Bayesian(n_samples=100, n_burnin=50), data; rng=rng)
+        @test_throws ArgumentError aic(bayes, data)
+        @test_throws ArgumentError bic(bayes, data)
+    end
+
+    @testset "WAIC / LOO" begin
+        rng = MersenneTwister(4)
+        data, _ = _simulate_separable(rng, 8)
+        bayes = fit(BradleyTerry(), Bayesian(n_samples=800, n_burnin=400), data; rng=rng)
+        w = waic(bayes, data)
+        l = loo(bayes, data)
+        @test w isa WAICResult && l isa LOOResult
+        @test isfinite(w.elpd_waic) && isfinite(l.elpd_loo)
+        @test w.p_waic > 0 && l.p_loo > 0
+        @test w.waic ≈ -2 * w.elpd_waic
+        @test l.looic ≈ -2 * l.elpd_loo
+        @test all(isfinite, l.pareto_k)
+        @test abs(w.elpd_waic - l.elpd_loo) < 2.0       # close on a well-behaved fit
+        # MLE fits have no posterior draws.
+        mle = fit(BradleyTerry(), MLE(), data)
+        @test_throws ArgumentError waic(mle, data)
+        @test_throws ArgumentError loo(mle, data)
+    end
+
+    @testset "SSR" begin
+        rng = MersenneTwister(5)
+        data, _ = _simulate_separable(rng, 8; npp=16)
+        bt = fit(BradleyTerry(), MLE(), data)
+        s_mle = ssr(bt, data)
+        @test 0.0 < s_mle < 1.0
+        @test s_mle > 0.8                                  # strongly separated items
+        bayes = fit(BradleyTerry(), Bayesian(n_samples=600, n_burnin=300), data; rng=rng)
+        @test abs(ssr(bayes) - s_mle) < 0.05               # posterior SD ≈ observed-info SE
+        th = fit(ThurstoneCaseV(), MLE(), data)
+        @test 0.0 < ssr(th, data) < 1.0
+    end
+
+    @testset "split-half reliability" begin
+        rng = MersenneTwister(6)
+        data, _ = _simulate_separable(rng, 8; npp=20)
+        r = split_half_reliability(BradleyTerry(), MLE(), data; n_splits=30, rng=rng)
+        @test r isa ReliabilityResult
+        @test r.n_splits == 30 && length(r.per_split) == 30
+        @test r.mean > 0.7                                 # reproducible scale
+        @test r.spearman_brown >= r.mean                   # step-up never lowers it
+    end
+
+    @testset "train/test split and k-fold" begin
+        rng = MersenneTwister(7)
+        data, _ = _simulate_separable(rng, 6)
+        tr, te = train_test_split(data; frac=0.7, rng=rng)
+        @test nobs(tr) + nobs(te) == nobs(data)            # partition conserves comparisons
+        @test tr.labels == data.labels
+        folds = kfold(data; k=5, rng=rng)
+        @test length(folds) == 5
+        @test sum(nobs(te) for (_, te) in folds) == nobs(data)
+    end
+
+    @testset "cross-validated log loss" begin
+        rng = MersenneTwister(8)
+        # Data generated from covariates: the true covariate should predict better
+        # out of sample than a random one.
+        K = 14; Ztrue = randn(rng, K, 1); λ = Ztrue[:, 1] .* 2.0
+        wins = zeros(Int, K, K)
+        for i in 1:K, j in (i + 1):K
+            p = 1.0 / (1.0 + exp(-(λ[i] - λ[j])))
+            for _ in 1:8
+                rand(rng) < p ? (wins[i, j] += 1) : (wins[j, i] += 1)
+            end
+        end
+        labels = ["i$i" for i in 1:K]
+        cd_true = CovariateData(PairwiseData(wins, labels), Ztrue, [:x])
+        cd_rand = CovariateData(PairwiseData(wins, labels), randn(rng, K, 1), [:x])
+        cv_true = crossvalidate(BradleyTerryCovariates(), MLE(), cd_true; k=5, rng=rng)
+        cv_rand = crossvalidate(BradleyTerryCovariates(), MLE(), cd_rand; k=5, rng=rng)
+        @test cv_true isa CVResult
+        @test cv_true.mean_logloss < cv_rand.mean_logloss
+    end
+
+    @testset "likelihood-ratio test" begin
+        rng = MersenneTwister(9)
+        K = 12; Z = randn(rng, K, 3); βt = [1.8, -1.2, 0.0]; λ = Z * βt
+        wins = zeros(Int, K, K)
+        for i in 1:K, j in (i + 1):K
+            p = 1.0 / (1.0 + exp(-(λ[i] - λ[j])))
+            for _ in 1:10
+                rand(rng) < p ? (wins[i, j] += 1) : (wins[j, i] += 1)
+            end
+        end
+        labels = ["i$i" for i in 1:K]
+        full = fit(BradleyTerryCovariates(), MLE(),
+                   CovariateData(PairwiseData(wins, labels), Z, [:x1, :x2, :x3]))
+        drop_noise = fit(BradleyTerryCovariates(), MLE(),
+                         CovariateData(PairwiseData(wins, labels), Z[:, 1:2], [:x1, :x2]))
+        drop_real = fit(BradleyTerryCovariates(), MLE(),
+                        CovariateData(PairwiseData(wins, labels), Z[:, 1:1], [:x1]))
+        t1 = lrtest(drop_noise, full)                      # drop x3 (noise)
+        @test t1 isa LRTResult
+        @test t1.df == 1
+        @test t1.statistic >= 0.0
+        @test t1.pvalue > 0.05                             # not significant
+        t2 = lrtest(drop_real, drop_noise)                 # drop x2 (real)
+        @test t2.pvalue < 0.01                             # significant
+        @test_throws ArgumentError lrtest(full, drop_noise)  # not nested (wrong order)
+        bt = fit(BradleyTerry(), MLE(), PairwiseData(wins, labels))
+        @test_throws ArgumentError lrtest(bt, bt)          # not covariate fits
+    end
+
+    @testset "rank correlation and decision agreement" begin
+        rng = MersenneTwister(10)
+        data, _ = _simulate_separable(rng, 10)
+        bt = fit(BradleyTerry(), MLE(), data)
+        th = fit(ThurstoneCaseV(), MLE(), data)
+        @test rank_correlation(bt, bt) ≈ 1.0               # self-correlation
+        @test rank_correlation(bt, th) > 0.95              # link invariance
+        @test rank_correlation(bt, th; method=:kendall) > 0.9
+        @test rank_correlation(bt, th; method=:pearson) > 0.95
+        @test_throws ArgumentError rank_correlation(bt, th; method=:bogus)
+        @test top_k_agreement(bt, bt, 3) == 1.0
+        @test 0.0 <= top_k_agreement(bt, th, 5) <= 1.0
+        ba = boundary_agreement(bt, bt, 0.0)
+        @test ba.agreement == 1.0
+        @test ba.both_above + ba.both_below == length(data.labels)
+    end
+
+    @testset "compare table" begin
+        rng = MersenneTwister(11)
+        data, _ = _simulate_separable(rng, 8)
+        btb = fit(BradleyTerry(), Bayesian(n_samples=500, n_burnin=250), data; rng=rng)
+        thb = fit(ThurstoneCaseV(), Bayesian(n_samples=500, n_burnin=250), data; rng=rng)
+        tbl = compare(btb, thb; data=data, criterion=:loo, names=["BT", "TCV"])
+        @test tbl isa ModelComparisonTable
+        @test length(tbl.values) == 2
+        @test tbl.Δ[1] == 0.0                              # best model first
+        @test issorted(tbl.values)
+        @test all(tbl.Δ .>= 0.0)
+        @test_throws ArgumentError compare(btb, thb; data=data, criterion=:bogus)
+    end
+
 end

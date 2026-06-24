@@ -28,6 +28,10 @@ makedocs(;
             "Anchored models" => "thurstone_case_v_anchored.md",
             "Covariate models" => "thurstone_case_v_covariates.md",
         ],
+        "Model checking" => [
+            "Diagnostics" => "diagnostics.md",
+            "Comparison" => "comparison.md",
+        ],
         "API reference" => "api.md",
     ],
 )
