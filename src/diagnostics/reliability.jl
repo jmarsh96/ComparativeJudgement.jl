@@ -28,8 +28,19 @@ function _lambda_se(f::FittedComparativeModel{M, I, CovariateMLEResult}) where {
     return sqrt.(max.(diag(V), 0.0))
 end
 
-_lambda_se(f::FittedComparativeModel{<:Union{BradleyTerry, ThurstoneCaseV}, MLE}) =
-    sqrt.(max.(diag(_strength_vcov(f)), 0.0))
+# Unlike vcov/stderror/confint (where a missing covariance is an error), SSR is a
+# descriptive summary, so a singular design degrades to NaN with a warning rather
+# than throwing — keeping reliability pipelines running.
+function _lambda_se(f::FittedComparativeModel{<:Union{BradleyTerry, ThurstoneCaseV}, MLE})
+    try
+        return sqrt.(max.(diag(_strength_vcov(f)), 0.0))
+    catch err
+        err isa SingularInformationError || rethrow()
+        @warn "ssr: observed-information standard errors are unavailable for this " *
+              "MLE fit (singular design); returning NaN. Use a Bayesian fit for SSR." exception = err
+        return fill(NaN, length(f.labels))
+    end
+end
 
 """
     ssr(fitted)

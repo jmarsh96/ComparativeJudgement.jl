@@ -44,6 +44,7 @@ function fit(model::BradleyTerry, method::MLE, data::PairwiseData{L}) where {L}
     wins = data.wins
     n = length(data.labels)
     n >= 2 || throw(ArgumentError("Need at least 2 items to fit BradleyTerry, got $n"))
+    _warn_degenerate_design(data)
     θ₀ = zeros(n - 1)
     f(θ_free) = _bt_neg_loglik(θ_free, wins)
     g!(G, θ_free) = _bt_neg_grad!(G, θ_free, wins)
