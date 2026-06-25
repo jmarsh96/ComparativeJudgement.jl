@@ -347,3 +347,95 @@ function _psis_smooth(lr::AbstractVector{Float64})
     lw .-= _logsumexp(lw)
     return lw, khat
 end
+
+# ─── Comparison-design connectivity ──────────────────────────────────────────
+#
+# The Bradley–Terry / Thurstone maximum-likelihood strengths are finite and
+# identified iff the directed win-graph (an edge i→j whenever i beat j) is
+# strongly connected (Ford, 1957). Otherwise some item is undefeated or winless,
+# or the items split into groups never compared across the boundary, and the
+# corresponding strengths diverge to ±∞ — which surfaces downstream as a singular
+# observed-information matrix. `design_connectivity` checks that condition and
+# flags the offending items; `_warn_degenerate_design` emits the warning at fit
+# time.
+
+"""
+    design_connectivity(data)
+
+Diagnose whether the comparison design in `data` (a [`PairwiseData`](@ref), or a
+[`CovariateData`](@ref)/[`AnchoredData`](@ref) wrapping one) identifies a finite
+Bradley–Terry / Thurstone maximum-likelihood fit. Returns a named tuple
+`(strongly_connected, undefeated, winless)`, where `strongly_connected` is `true`
+iff the directed win-graph (`i → j` whenever item `i` beat item `j`) is strongly
+connected, and `undefeated` (never lost) and `winless` (never won) are vectors of
+*item labels*.
+
+Any undefeated or winless item, or `strongly_connected = false`, means the MLE
+strengths are not all finite, so the observed-information standard errors behind
+[`vcov`](@ref), [`stderror`](@ref), [`confint`](@ref) and [`ssr`](@ref) are
+unavailable — fit the model with [`Bayesian`](@ref) inference instead, which is
+prior-regularised and always well defined.
+"""
+function design_connectivity(data)
+    pw = _pairwise(data)
+    wins = pw.wins
+    labels = pw.labels
+    K = size(wins, 1)
+
+    # Forward (i beat j) and reverse adjacency lists from the non-zero wins.
+    fwd = [Int[] for _ in 1:K]
+    bwd = [Int[] for _ in 1:K]
+    @inbounds for i in 1:K, j in 1:K
+        if i != j && wins[i, j] > 0
+            push!(fwd[i], j)
+            push!(bwd[j], i)
+        end
+    end
+
+    # Nodes reachable from node 1 along `adj` (iterative DFS).
+    reachable(adj) = begin
+        seen = falses(K)
+        seen[1] = true
+        stack = [1]
+        while !isempty(stack)
+            u = pop!(stack)
+            for v in adj[u]
+                seen[v] || (seen[v] = true; push!(stack, v))
+            end
+        end
+        seen
+    end
+
+    # Strongly connected ⟺ node 1 reaches every node and is reached by every node.
+    strongly_connected = K <= 1 ? true : (all(reachable(fwd)) && all(reachable(bwd)))
+
+    losses = vec(sum(wins, dims = 1))       # column sums: times each item was beaten
+    wins_count = vec(sum(wins, dims = 2))   # row sums:    times each item won
+    undefeated = labels[findall(==(0), losses)]
+    winless = labels[findall(==(0), wins_count)]
+
+    return (strongly_connected = strongly_connected,
+            undefeated = undefeated, winless = winless)
+end
+
+# Build the human-readable description of a degenerate design, or `nothing` if it
+# is well behaved. Shared by the fit-time warning and the `vcov` error message.
+function _degeneracy_detail(data)
+    d = design_connectivity(data)
+    (d.strongly_connected && isempty(d.undefeated) && isempty(d.winless)) && return nothing
+    parts = String[]
+    d.strongly_connected || push!(parts, "the win-graph is not strongly connected")
+    isempty(d.undefeated) || push!(parts, "undefeated items $(d.undefeated)")
+    isempty(d.winless) || push!(parts, "winless items $(d.winless)")
+    return join(parts, "; ")
+end
+
+# Warn, once at fit time, if a pairwise design cannot identify a finite MLE.
+function _warn_degenerate_design(data)
+    detail = _degeneracy_detail(data)
+    detail === nothing && return
+    @warn "comparison design does not identify a finite maximum-likelihood fit " *
+          "($detail): some strengths diverge to ±∞, so the observed-information " *
+          "standard errors behind vcov/stderror/confint/ssr will be unavailable. " *
+          "Consider a Bayesian fit, which is prior-regularised."
+end

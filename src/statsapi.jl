@@ -165,7 +165,26 @@ function _hessian_fd(f, x::Vector{Float64}; h::Float64=1e-4)
     return H
 end
 
+"""
+    SingularInformationError(msg)
+
+Thrown by [`vcov`](@ref)/[`stderror`](@ref)/[`confint`](@ref) for a plain
+Bradley–Terry/Thurstone [`MLE`](@ref) fit whose observed-information matrix is
+singular: the comparison design does not identify all the strengths (see
+[`design_connectivity`](@ref)), so frequentist standard errors do not exist. Fit
+the model with [`Bayesian`](@ref) inference for regularised uncertainty instead.
+"""
+struct SingularInformationError <: Exception
+    msg::String
+end
+
+Base.showerror(io::IO, e::SingularInformationError) = print(io, "SingularInformationError: ", e.msg)
+
 # Observed-information covariance of the centred strengths for a plain MLE fit.
+# The observed-information matrix is singular whenever the design fails to
+# identify all strengths (a disconnected win-graph, or undefeated/winless items);
+# we surface that as a domain-specific `SingularInformationError` explaining the
+# cause rather than leaking a bare `LinearAlgebra.SingularException`.
 function _strength_vcov(f::FittedComparativeModel{<:Union{BradleyTerry, ThurstoneCaseV}, MLE})
     K = length(f.labels)
     θ̂ = collect(float.(Optim.minimizer(f.result)))
@@ -173,7 +192,17 @@ function _strength_vcov(f::FittedComparativeModel{<:Union{BradleyTerry, Thurston
     negll = f.model isa BradleyTerry ? (x -> _bt_neg_loglik(x, wins)) :
                                        (x -> _tcv_neg_loglik(x, wins))
     H = _hessian_fd(negll, θ̂)
-    Σfree = inv(Symmetric(H))                              # covariance of the free strengths
+    Σfree = try
+        inv(Symmetric(H))                                 # covariance of the free strengths
+    catch err
+        err isa LinearAlgebra.SingularException || rethrow()
+        detail = _degeneracy_detail(f.data)
+        cause = detail === nothing ? "the information matrix is numerically rank-deficient" : detail
+        throw(SingularInformationError(
+            "observed-information covariance is singular ($cause): the comparison " *
+            "design does not identify all Bradley–Terry/Thurstone strengths. Fit " *
+            "with Bayesian inference for regularised vcov/stderror/confint."))
+    end
     Σfull = zeros(K, K)
     Σfull[2:K, 2:K] .= Σfree
     C = Matrix{Float64}(I, K, K) .- fill(1.0 / K, K, K)    # centring projection

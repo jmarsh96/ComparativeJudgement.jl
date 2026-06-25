@@ -30,6 +30,7 @@ export dof, nobs, vcov, stderror, aic, aicc, bic
 # Model checking — diagnostics (single model)
 export waic, loo, ssr, split_half_reliability
 export WAICResult, LOOResult, ReliabilityResult
+export design_connectivity, SingularInformationError
 # Model checking — comparison (between models)
 export train_test_split, kfold, log_loss, crossvalidate
 export lrtest, rank_correlation, top_k_agreement, boundary_agreement, compare

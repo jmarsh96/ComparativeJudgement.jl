@@ -68,6 +68,7 @@ function fit(model::ThurstoneCaseV, method::MLE, data::PairwiseData{L}) where {L
     wins = data.wins
     n = length(data.labels)
     n >= 2 || throw(ArgumentError("Need at least 2 items to fit ThurstoneCaseV, got $n"))
+    _warn_degenerate_design(data)
     f(λ_free) = _tcv_neg_loglik(λ_free, wins)
     g!(G, λ_free) = _tcv_neg_grad!(G, λ_free, wins)
     result = optimize(f, g!, zeros(n - 1), LBFGS())
