@@ -106,25 +106,25 @@ heatmap(winprop[order, order]; c=:RdBu, clims=(0, 1), aspect_ratio=1,
 
 ```@example cov
 fitted = fit(BradleyTerryCovariates(), MLE(), cd)
-coefficients(fitted)
+coefnames(fitted) .=> coef(fitted)
 ```
 
-[`coefficients`](@ref) returns ``\hat\beta`` keyed by covariate name — close to
-the true ``(1.5, -1.0, 0, 0, 0)``. [`coefficient_std`](@ref) returns the standard
-errors (from the inverse Fisher information) and [`coefficient_intervals`](@ref)
-the Wald confidence intervals:
+[`coef`](@ref) returns ``\hat\beta`` (aligned with [`coefnames`](@ref)) — close to
+the true ``(1.5, -1.0, 0, 0, 0)``. [`stderror`](@ref) returns the standard errors
+(from the inverse Fisher information) and [`confint`](@ref) the Wald confidence
+intervals (a `k×2` matrix of `(lower, upper)` rows):
 
 ```@example cov
-coefficient_intervals(fitted; level=0.95)
+confint(fitted; level=0.95)
 ```
 
 Plotting the estimates with their 95% confidence intervals separates the two
 signal covariates from the three noise covariates, whose intervals straddle zero:
 
 ```@example cov
-β̂   = collect(values(coefficients(fitted)))
-lohi = collect(values(coefficient_intervals(fitted; level=0.95)))
-lo, hi = first.(lohi), last.(lohi)
+β̂   = coef(fitted)
+ci  = confint(fitted; level=0.95)
+lo, hi = ci[:, 1], ci[:, 2]
 scatter(1:p, β̂; yerror=(β̂ .- lo, hi .- β̂), label="MLE, 95% CI",
         xticks=(1:p, string.(cd.names)), xlabel="covariate", ylabel="coefficient β",
         legend=:topright)
@@ -159,7 +159,7 @@ criterion (`:AIC` or `:BIC`), in direction `:forward`, `:backward`, or `:both`:
 ```@example cov
 selected = fit(BradleyTerryCovariates(),
                StepwiseMLE(direction=:both, criterion=:BIC), cd)
-coefficients(selected)
+coefnames(selected) .=> coef(selected)
 ```
 
 BIC keeps only the two real covariates. The search path is recorded in
@@ -191,25 +191,25 @@ A Bayesian fit returns posterior draws of ``\beta``. With the default
 ```@example cov
 method = Bayesian(n_samples=1500, n_burnin=500)
 bayes = fit(BradleyTerryCovariates(), method, cd; rng=MersenneTwister(1))
-coefficients(bayes)
+coefnames(bayes) .=> coef(bayes)
 ```
 
-The coefficient uncertainty comes from the same accessors as the MLE fit:
-[`coefficient_std`](@ref) gives posterior standard deviations and
-[`coefficient_intervals`](@ref) posterior credible intervals (the raw draws are
-also available in `bayes.result.β_samples`, an `n_samples × p` matrix):
+The coefficient uncertainty comes from the same StatsAPI accessors as the MLE fit:
+[`stderror`](@ref) gives posterior standard deviations and [`confint`](@ref)
+posterior credible intervals (the raw draws are also available in
+`bayes.result.β_samples`, an `n_samples × p` matrix):
 
 ```@example cov
-coefficient_intervals(bayes; level=0.95)
+confint(bayes; level=0.95)
 ```
 
 Their posterior means and 95% credible intervals recover the truth, with every
 noise covariate's interval comfortably covering zero:
 
 ```@example cov
-bm   = collect(values(coefficients(bayes)))
-lohi = collect(values(coefficient_intervals(bayes; level=0.95)))
-lo, hi = first.(lohi), last.(lohi)
+bm   = coef(bayes)
+ci   = confint(bayes; level=0.95)
+lo, hi = ci[:, 1], ci[:, 2]
 scatter(1:p, bm; yerror=(bm .- lo, hi .- bm), label="posterior mean, 95% CI",
         xticks=(1:p, string.(cd.names)), xlabel="covariate", ylabel="coefficient β")
 scatter!(1:p, β_true; marker=:x, markersize=7, color=:red, label="truth")
@@ -233,7 +233,7 @@ a hard in/out decision. The null covariates collapse toward zero:
 ```@example cov
 hs = fit(BradleyTerryCovariates(), method, cd, HorseshoePrior();
          rng=MersenneTwister(2))
-coefficients(hs)
+coefnames(hs) .=> coef(hs)
 ```
 
 Overlaying the horseshoe posterior means and 95% credible intervals on the
@@ -243,12 +243,12 @@ their intervals tighten around it:
 
 ```@example cov
 xs = 1:p
-mn = collect(values(coefficients(bayes)))                     # Normal prior
-mh = collect(values(coefficients(hs)))                        # Horseshoe prior
-cin = collect(values(coefficient_intervals(bayes; level=0.95)))
-cih = collect(values(coefficient_intervals(hs;    level=0.95)))
-lon, hin = first.(cin), last.(cin)
-loh, hih = first.(cih), last.(cih)
+mn = coef(bayes)                     # Normal prior
+mh = coef(hs)                        # Horseshoe prior
+cin = confint(bayes; level=0.95)
+cih = confint(hs;    level=0.95)
+lon, hin = cin[:, 1], cin[:, 2]
+loh, hih = cih[:, 1], cih[:, 2]
 scatter(xs .- 0.1, mn; yerror=(mn .- lon, hin .- mn), label="Normal prior",
         xticks=(xs, string.(cd.names)), xlabel="covariate",
         ylabel="posterior β (mean, 95% CI)", legend=:topright)

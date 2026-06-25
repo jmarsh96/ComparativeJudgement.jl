@@ -51,9 +51,10 @@ function fit(model::BradleyTerry, method::MLE, data::PairwiseData{L}) where {L}
     return FittedComparativeModel(
         model, 
         method, 
-        result, 
+        result,
         data.labels,
-        Optim.converged(result), 
+        data,
+        Optim.converged(result),
         Optim.iterations(result)
     )
 end
@@ -68,10 +69,6 @@ end
 
 function fit(model::BradleyTerry, wins::Matrix{Int}, labels::Vector{L}) where {L}
     return fit(model, MLE(), PairwiseData(wins, labels))
-end
-
-function loglikelihood(fitted::FittedComparativeModel{BradleyTerry, MLE})
-    return -Optim.minimum(fitted.result)
 end
 
 function strengths(fitted::FittedComparativeModel{BradleyTerry, MLE})
@@ -254,7 +251,7 @@ function fit(model::BradleyTerry, method::Bayesian, data::PairwiseData{L},
     end
 
     result = BTMCMCSamples(samples, loglikelihoods, method.n_samples, method.n_burnin)
-    return FittedComparativeModel(model, method, result, data.labels, true, total)
+    return FittedComparativeModel(model, method, result, data.labels, data, true, total)
 end
 
 function fit(model::BradleyTerry, method::Bayesian, data::PairwiseData{L};
@@ -281,10 +278,6 @@ function credible_interval(fitted::FittedComparativeModel{BradleyTerry, Bayesian
     α = (1.0 - prob) / 2.0
     col = fitted.result.samples[:, k]
     return (quantile(col, α), quantile(col, 1.0 - α))
-end
-
-function loglikelihood(fitted::FittedComparativeModel{BradleyTerry, Bayesian})
-    return fitted.result.loglikelihoods
 end
 
 function strengths(fitted::FittedComparativeModel{BradleyTerry, Bayesian})

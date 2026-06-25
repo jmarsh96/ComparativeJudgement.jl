@@ -31,6 +31,71 @@ function _anchored_init_β(λS::Vector{Float64}, y::Vector{Float64}, prior::Anch
     return a, b, σ²
 end
 
+# ─── Shared anchored MLE machinery (model-agnostic) ──────────────────────────
+#
+# The pairwise likelihood already identifies λ up to its (centred) location — the
+# probit/logit scale is fixed — so the anchored MLE is two-stage: take the plain
+# pairwise-MLE strengths, then calibrate the scale by weighted least squares of
+# the anchor values on the group-mean strengths (weights n_g, var σ²/n_g). This
+# is well-posed, unlike jointly profiling σ², whose objective is unbounded as the
+# anchor residuals are driven to zero.
+
+# Weighted least squares of y on group-mean strengths μ. Returns (a, b, σ², cal_ll)
+# where cal_ll is the Gaussian calibration log-likelihood Σ log N(y_g | a+b·μ_g, σ²/n_g).
+function _anchored_profile(μ::Vector{Float64}, ng::Vector{Float64},
+                           y::Vector{Float64}, G::Int, sum_log_ng::Float64)
+    sρ = 0.0; sρμ = 0.0; sρμμ = 0.0; sρy = 0.0; sρμy = 0.0
+    @inbounds for g in 1:G
+        ρ = ng[g]; μg = μ[g]; yg = y[g]
+        sρ += ρ; sρμ += ρ * μg; sρμμ += ρ * μg^2; sρy += ρ * yg; sρμy += ρ * μg * yg
+    end
+    det = sρ * sρμμ - sρμ^2
+    b = det > 1e-10 ? (sρ * sρμy - sρμ * sρy) / det : 1.0   # fall back to b=1 if μ collinear
+    a = (sρy - b * sρμ) / sρ
+    rss = 0.0
+    @inbounds for g in 1:G
+        rss += ng[g] * (y[g] - a - b * μ[g])^2
+    end
+    σ² = max(rss / G, 1e-12)
+    cal_ll = -0.5 * (G * log(2π * σ²) - sum_log_ng + rss / σ²)
+    return a, b, σ², cal_ll
+end
+
+# Build an AnchoredMLEResult from centred strengths λ and the pairwise log-likelihood.
+function _anchored_mle_result(λ::Vector{Float64}, pairwise_ll::Float64,
+                              groups::Vector{Vector{Int}}, ng::Vector{Float64},
+                              y::Vector{Float64}, sum_log_ng::Float64)
+    G = length(groups)
+    μ = Float64[sum(@view λ[g]) / length(g) for g in groups]
+    a, b, σ², cal_ll = _anchored_profile(μ, ng, y, G, sum_log_ng)
+    return AnchoredMLEResult(λ, a, b, σ², pairwise_ll + cal_ll)
+end
+
+"""
+    fit(model::Anchored{BradleyTerry}, method::MLE, data::AnchoredData)
+
+Maximum-likelihood fit of the anchored Bradley–Terry model: the latent strengths
+λ are estimated by the plain Bradley–Terry MLE, then the anchor measurements
+`y = a + b·λ + ε` calibrate the scale by weighted least squares
+([`calibration`](@ref)). Query with [`strengths`](@ref), [`predict`](@ref) and
+[`loglikelihood`](@ref) (the maximised joint log-likelihood).
+"""
+function fit(model::Anchored{BradleyTerry}, method::MLE,
+             data::AnchoredData{PairwiseData{L}, L}) where {L}
+    pdata = data.data
+    K = length(pdata.labels)
+    K >= 2 || throw(ArgumentError("Need at least 2 items to fit BradleyTerryAnchored, got $K"))
+    ng = Float64[length(g) for g in data.anchor_groups]
+    sum_log_ng = sum(log, ng)
+    mle = fit(BradleyTerry(), MLE(), pdata)
+    λ = _full_theta(Optim.minimizer(mle.result))
+    λ .-= mean(λ)
+    result = _anchored_mle_result(λ, loglikelihood(mle), data.anchor_groups, ng,
+                                  data.anchor_values, sum_log_ng)
+    return FittedComparativeModel(model, method, result, pdata.labels, data,
+                                  mle.converged, mle.iterations)
+end
+
 """
     fit(model::Anchored{BradleyTerry}, [method::Bayesian],
         data::AnchoredData, [prior::AnchoredPrior]; rng=Random.default_rng())
@@ -223,7 +288,7 @@ function fit(model::Anchored{BradleyTerry}, method::Bayesian,
 
     result = AnchoredMCMCSamples(λ_samples, β_samples, σ²_samples, loglikelihoods,
                                  method.n_samples, method.n_burnin, method.thin)
-    return FittedComparativeModel(model, method, result, pdata.labels, true, total)
+    return FittedComparativeModel(model, method, result, pdata.labels, data, true, total)
 end
 
 function fit(model::Anchored{BradleyTerry}, data::AnchoredData{PairwiseData{L}, L};
@@ -250,10 +315,6 @@ function credible_interval(fitted::FittedComparativeModel{<:Anchored, Bayesian},
     return (quantile(col, α), quantile(col, 1.0 - α))
 end
 
-function loglikelihood(fitted::FittedComparativeModel{<:Anchored, Bayesian})
-    return fitted.result.loglikelihoods
-end
-
 function strengths(fitted::FittedComparativeModel{<:Anchored, Bayesian})
     return posterior_mean(fitted)
 end
@@ -265,8 +326,17 @@ function calibration(fitted::FittedComparativeModel{<:Anchored, Bayesian})
             σ² = mean(res.σ²_samples))
 end
 
-# Posterior-predictive draws y* = a + b·λ_k + ε on the anchor measurement scale.
-# With prob given, returns the symmetric credible interval of y* instead.
+"""
+    predict(fitted, k; prob=nothing, rng=Random.default_rng())
+    predict(fitted, label; prob=nothing, rng=Random.default_rng())
+    predict(fitted)
+
+Posterior-predictive anchor measurements `y* = a + b·λ + ε` for an
+[`Anchored`](@ref) fit, on the scale of the anchor values. With an item index
+`k` or `label`, returns a vector of posterior-predictive draws, or the symmetric
+`prob` credible interval `(lo, hi)` when `prob` is given. With no item argument,
+returns the vector of posterior-predictive means for all items.
+"""
 function predict(fitted::FittedComparativeModel{<:Anchored, Bayesian}, k::Integer;
                  prob::Union{Nothing, Float64}=nothing,
                  rng::AbstractRNG=Random.default_rng())
@@ -292,7 +362,57 @@ function predict(fitted::FittedComparativeModel{<:Anchored, Bayesian})
     return vec(mean(res.β_samples[:, 1] .+ res.β_samples[:, 2] .* res.λ_samples, dims=1))
 end
 
+# ─── Anchored MLE accessors (dispatch on AnchoredMLEResult, model-agnostic) ──
+
+function strengths(fitted::FittedComparativeModel{<:Anchored, MLE, AnchoredMLEResult})
+    return fitted.result.λ
+end
+
+function calibration(fitted::FittedComparativeModel{<:Anchored, MLE, AnchoredMLEResult})
+    r = fitted.result
+    return (a = r.a, b = r.b, σ² = r.σ²)
+end
+
+# Point prediction y* = a + b·λ_k on the anchor measurement scale. With prob
+# given, returns the plug-in normal prediction interval a + b·λ_k ± z·σ.
+function predict(fitted::FittedComparativeModel{<:Anchored, MLE, AnchoredMLEResult},
+                 k::Integer; prob::Union{Nothing, Float64}=nothing)
+    r = fitted.result
+    ŷ = r.a + r.b * r.λ[k]
+    prob === nothing && return ŷ
+    0.0 < prob < 1.0 || throw(ArgumentError("prob must be in (0, 1), got $prob"))
+    z = _norm_quantile(1.0 - (1.0 - prob) / 2.0) * sqrt(r.σ²)
+    return (ŷ - z, ŷ + z)
+end
+
+function predict(fitted::FittedComparativeModel{M, MLE, AnchoredMLEResult, L}, label::L;
+                 prob::Union{Nothing, Float64}=nothing) where {M <: Anchored, L}
+    idx = findfirst(==(label), fitted.labels)
+    idx === nothing && throw(ArgumentError("Label $(label) not found in fitted model"))
+    return predict(fitted, idx; prob=prob)
+end
+
+function predict(fitted::FittedComparativeModel{<:Anchored, MLE, AnchoredMLEResult})
+    r = fitted.result
+    return r.a .+ r.b .* r.λ
+end
+
 # ─── BT-specific accessors for the anchored model ───
+
+function probability(fitted::FittedComparativeModel{Anchored{BradleyTerry}, MLE, AnchoredMLEResult},
+                     i::Integer, j::Integer)
+    λ = fitted.result.λ
+    return 1.0 / (1.0 + exp(-(λ[i] - λ[j])))
+end
+
+function probability(fitted::FittedComparativeModel{Anchored{BradleyTerry}, MLE, AnchoredMLEResult, L},
+                     item_i::L, item_j::L) where {L}
+    idx_i = findfirst(==(item_i), fitted.labels)
+    idx_j = findfirst(==(item_j), fitted.labels)
+    idx_i === nothing && throw(ArgumentError("Label $(item_i) not found in fitted model"))
+    idx_j === nothing && throw(ArgumentError("Label $(item_j) not found in fitted model"))
+    return probability(fitted, idx_i, idx_j)
+end
 
 function probability(fitted::FittedComparativeModel{Anchored{BradleyTerry}, Bayesian},
                      i::Integer, j::Integer)

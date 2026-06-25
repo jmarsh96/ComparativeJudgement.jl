@@ -170,7 +170,7 @@ using LinearAlgebra: diag, dot
         lb, ub = credible_interval(fitted, 1)
         @test lb < ub
 
-        ll = loglikelihood(fitted)
+        ll = mcmc_loglikelihoods(fitted)
         @test ll isa Vector{Float64}
         @test length(ll) == 500
         @test all(isfinite, ll)
@@ -361,7 +361,7 @@ using LinearAlgebra: diag, dot
         lb, ub = credible_interval(fitted, 1)
         @test lb < ub
 
-        ll = loglikelihood(fitted)
+        ll = mcmc_loglikelihoods(fitted)
         @test length(ll) == 600
         @test all(isfinite, ll)
     end
@@ -431,7 +431,7 @@ using LinearAlgebra: diag, dot
 
         f = fit(BradleyTerryCovariates(), MLE(), cd)
         @test f.converged
-        β̂ = collect(values(coefficients(f)))
+        β̂ = coef(f)
         @test isapprox(β̂, βtrue; atol=0.4)
 
         # strengths are λ = Zβ, centred to sum to zero
@@ -470,13 +470,13 @@ using LinearAlgebra: diag, dot
 
         f = fit(BradleyTerryCovariates(), Bayesian(n_samples=800, n_burnin=300),
                 cd; rng=MersenneTwister(1))
-        β̂ = collect(values(coefficients(f)))
+        β̂ = coef(f)
         @test isapprox(β̂, βtrue; atol=0.4)
         @test length(strengths(f)) == 35
         @test length(posterior_std(f)) == 35
         lo, hi = credible_interval(f, 1)
         @test lo < hi
-        @test loglikelihood(f) isa Vector{Float64}
+        @test mcmc_loglikelihoods(f) isa Vector{Float64}
         @test 0.0 < probability(f, 1, 2) < 1.0
     end
 
@@ -492,37 +492,36 @@ using LinearAlgebra: diag, dot
 
         # MLE: Wald confidence intervals from the Fisher information
         f = fit(BradleyTerryCovariates(), MLE(), cd)
-        se = coefficient_std(f)
-        ci = coefficient_intervals(f; level=0.95)
-        @test keys(se) == (:x1, :x2, :x3)
-        @test all(values(se) .> 0)
-        β̂ = coefficients(f)
-        for k in keys(ci)
-            lo, hi = ci[k]
-            @test lo < β̂[k] < hi                       # estimate inside its interval
+        se = stderror(f)
+        ci = confint(f; level=0.95)
+        @test coefnames(f) == ["x1", "x2", "x3"]
+        @test all(se .> 0)
+        β̂ = coef(f)
+        for k in 1:length(β̂)
+            @test ci[k, 1] < β̂[k] < ci[k, 2]           # estimate inside its interval
         end
-        @test ci.x1[1] > 0 && ci.x2[2] < 0             # signal CIs exclude zero
-        @test ci.x3[1] < 0 < ci.x3[2]                  # null CI covers zero
+        @test ci[1, 1] > 0 && ci[2, 2] < 0             # signal CIs exclude zero
+        @test ci[3, 1] < 0 < ci[3, 2]                  # null CI covers zero
         # wider level ⇒ wider interval
-        ci99 = coefficient_intervals(f; level=0.99)
-        @test (ci99.x1[2] - ci99.x1[1]) > (ci.x1[2] - ci.x1[1])
-        @test_throws ArgumentError coefficient_intervals(f; level=1.5)
+        ci99 = confint(f; level=0.99)
+        @test (ci99[1, 2] - ci99[1, 1]) > (ci[1, 2] - ci[1, 1])
+        @test_throws ArgumentError confint(f; level=1.5)
 
         # Bayesian: posterior credible intervals
         fb = fit(BradleyTerryCovariates(), Bayesian(n_samples=800, n_burnin=300),
                  cd; rng=MersenneTwister(11))
-        cib = coefficient_intervals(fb; level=0.9)
-        sdb = coefficient_std(fb)
-        @test all(values(sdb) .> 0)
-        for k in keys(cib)
-            lo, hi = cib[k]
-            @test lo < coefficients(fb)[k] < hi
+        cib = confint(fb; level=0.9)
+        sdb = stderror(fb)
+        β̂b = coef(fb)
+        @test all(sdb .> 0)
+        for k in 1:length(β̂b)
+            @test cib[k, 1] < β̂b[k] < cib[k, 2]
         end
-        @test cib.x1[1] > 0 && cib.x2[2] < 0           # signal credible intervals exclude zero
+        @test cib[1, 1] > 0 && cib[2, 2] < 0           # signal credible intervals exclude zero
 
         # selection carries through: intervals only for retained covariates
         fs = fit(BradleyTerryCovariates(), StepwiseMLE(criterion=:BIC), cd)
-        @test keys(coefficient_intervals(fs)) == keys(coefficients(fs))
+        @test size(confint(fs), 1) == length(coef(fs)) == length(coefnames(fs))
     end
 
     @testset "Horseshoe shrinks null coefficients" begin
@@ -532,7 +531,7 @@ using LinearAlgebra: diag, dot
 
         f = fit(BradleyTerryCovariates(), Bayesian(n_samples=800, n_burnin=400),
                 cd, HorseshoePrior(); rng=MersenneTwister(5))
-        β̂ = collect(values(coefficients(f)))
+        β̂ = coef(f)
         @test abs(β̂[1]) > 1.0                       # signal survives
         @test all(abs.(β̂[2:4]) .< 0.4)              # nulls shrunk toward zero
         @test abs(β̂[1]) > maximum(abs.(β̂[2:4]))
@@ -562,7 +561,7 @@ using LinearAlgebra: diag, dot
 
         f = fit(BradleyTerryCovariates(), StepwiseMLE(direction=:both, criterion=:BIC), cd)
         @test sort(f.result.selected) == [1, 2]     # picks the two real covariates
-        @test length(coefficients(f)) == 2
+        @test length(coef(f)) == 2
         @test !isempty(f.result.trace)
 
         # forward and backward also reach the right subset here
@@ -573,6 +572,648 @@ using LinearAlgebra: diag, dot
 
         @test_throws ArgumentError StepwiseMLE(direction=:sideways)
         @test_throws ArgumentError StepwiseMLE(criterion=:WAIC)
+    end
+
+    # ─────────────────────────── Thurstone Case V ────────────────────────────
+
+    # Probit comparison data with known latent strengths λ: P(i beats j) = Φ(λᵢ−λⱼ).
+    _Φ(x) = ComparativeJudgement._normcdf(x)
+    function _simulate_thurstone_data(rng, λ; n_per_pair=20)
+        K = length(λ)
+        wins = zeros(Int, K, K)
+        for i in 1:K, j in (i + 1):K
+            p = _Φ(λ[i] - λ[j])
+            for _ in 1:n_per_pair
+                rand(rng) < p ? (wins[i, j] += 1) : (wins[j, i] += 1)
+            end
+        end
+        return wins
+    end
+    function _simulate_thurstone_covariate_data(rng, K, βtrue; n_per_pair=14)
+        Z = randn(rng, K, length(βtrue))
+        λ = Z * βtrue
+        wins = _simulate_thurstone_data(rng, λ; n_per_pair=n_per_pair)
+        labels = ["item$i" for i in 1:K]
+        return CovariateData(PairwiseData(wins, labels), Z), λ
+    end
+
+    @testset "ThurstoneCaseV — construction" begin
+        @test ThurstoneCaseV() isa ThurstoneCaseV
+        @test ThurstoneCaseV().distribution === :normal
+        @test ThurstoneCaseV(:normal).distribution === :normal
+        @test ThurstoneCaseVAnchored() isa Anchored{ThurstoneCaseV}
+        @test ThurstoneCaseVCovariates() isa Covariates{ThurstoneCaseV}
+        # unimplemented distribution is rejected at fit time
+        @test_throws ArgumentError fit(ThurstoneCaseV(:logistic), MLE(),
+                                       PairwiseData([0 3; 1 0], ["A", "B"]))
+    end
+
+    @testset "ThurstoneCaseV MLE — 2 items" begin
+        wins = [0 3; 1 0]
+        data = PairwiseData(wins, ["A", "B"])
+        fitted = fit(ThurstoneCaseV(), MLE(), data)
+        @test fitted.converged
+        @test fitted.model isa ThurstoneCaseV
+        p_AB = probability(fitted, "A", "B")
+        @test p_AB > 0.5
+        @test probability(fitted, "B", "A") ≈ 1 - p_AB atol=1e-9
+        @test probability(fitted, 1, 2) ≈ p_AB
+        ll = loglikelihood(fitted)
+        @test isfinite(ll) && ll <= 0
+    end
+
+    @testset "ThurstoneCaseV MLE — overloads, equal wins, ordinal, bad label" begin
+        wins = [0 3; 1 0]
+        f1 = fit(ThurstoneCaseV(), MLE(), wins, ["A", "B"])
+        f2 = fit(ThurstoneCaseV(), PairwiseData(wins, ["A", "B"]))
+        f3 = fit(ThurstoneCaseV(), wins, ["A", "B"])
+        @test probability(f1, "A", "B") ≈ probability(f2, "A", "B") ≈ probability(f3, "A", "B")
+
+        feq = fit(ThurstoneCaseV(), [0 5; 5 0], [:x, :y])
+        @test probability(feq, :x, :y) ≈ 0.5 atol=1e-6
+
+        ford = fit(ThurstoneCaseV(), [0 5 2; 15 0 5; 18 15 0], [1, 2, 3])
+        @test probability(ford, 1, 2) < 0.5
+        @test probability(ford, 1, 3) < probability(ford, 1, 2)
+
+        @test_throws ArgumentError probability(f1, "A", "C")
+    end
+
+    @testset "ThurstoneCaseV MLE — strengths centred & ordered" begin
+        data = PairwiseData([0 5 2; 15 0 5; 18 15 0], ["a", "b", "c"])
+        λ̂ = strengths(fit(ThurstoneCaseV(), MLE(), data))
+        @test length(λ̂) == 3
+        @test abs(sum(λ̂)) < 1e-10
+        @test issorted(λ̂)
+    end
+
+    @testset "ThurstoneCaseV MLE — recovers known strengths" begin
+        rng = MersenneTwister(202)
+        λ_true = collect(range(-2.0, 2.0, length=10)); λ_true .-= sum(λ_true) / 10
+        wins = _simulate_thurstone_data(rng, λ_true; n_per_pair=40)
+        f = fit(ThurstoneCaseV(), MLE(), PairwiseData(wins, collect(1:10)))
+        @test cor(strengths(f), λ_true) > 0.95
+        @test sortperm(strengths(f)) == sortperm(λ_true)
+    end
+
+    @testset "ThurstoneCaseV Bayesian — 2 items" begin
+        rng = MersenneTwister(1)
+        data = PairwiseData([0 3; 1 0], ["A", "B"])
+        fitted = fit(ThurstoneCaseV(), Bayesian(n_samples=500, n_burnin=200), data; rng=rng)
+        @test fitted.iterations == 700
+        @test fitted.result isa BTMCMCSamples
+        p_AB = probability(fitted, "A", "B")
+        @test p_AB > 0.5
+        @test probability(fitted, "B", "A") ≈ 1 - p_AB atol=1e-10
+        @test length(posterior_mean(fitted)) == 2
+        @test all(>(0), posterior_std(fitted))
+        lb, ub = credible_interval(fitted, 1)
+        @test lb < ub
+        ll = mcmc_loglikelihoods(fitted)
+        @test ll isa Vector{Float64} && length(ll) == 500 && all(isfinite, ll)
+        @test strengths(fitted) == posterior_mean(fitted)
+    end
+
+    @testset "ThurstoneCaseV Bayesian — default prior, ordinal, recovery, bad label" begin
+        rng = MersenneTwister(3)
+        f0 = fit(ThurstoneCaseV(), Bayesian(n_samples=200, n_burnin=100),
+                 PairwiseData([0 3; 1 0], ["A", "B"]); rng=rng)
+        @test probability(f0, "A", "B") > 0.5
+
+        wins = _simulate_thurstone_data(MersenneTwister(8),
+                                        collect(range(-2, 2, length=8)); n_per_pair=30)
+        fb = fit(ThurstoneCaseV(), Bayesian(n_samples=600, n_burnin=300),
+                 wins, collect(1:8), NormalPrior(8); rng=MersenneTwister(9))
+        @test sortperm(posterior_mean(fb)) == collect(1:8)
+
+        @test_throws ArgumentError probability(f0, "A", "C")
+    end
+
+    @testset "ThurstoneCaseV MLE ≈ Bayesian" begin
+        rng = MersenneTwister(77)
+        wins = _simulate_thurstone_data(rng, collect(range(-1.5, 1.5, length=6)); n_per_pair=40)
+        data = PairwiseData(wins, collect(1:6))
+        fm = fit(ThurstoneCaseV(), MLE(), data)
+        fb = fit(ThurstoneCaseV(), Bayesian(n_samples=1500, n_burnin=500), data;
+                 rng=MersenneTwister(1))
+        @test isapprox(strengths(fm), posterior_mean(fb); atol=0.25)
+    end
+
+    @testset "ThurstoneCaseVAnchored — MLE recovery" begin
+        rng = MersenneTwister(31)
+        n = 10
+        λ_true = collect(range(-1.5, 1.5, length=n)); λ_true .-= sum(λ_true) / n
+        a_true, b_true = 5.0, 3.0
+        wins = _simulate_thurstone_data(rng, λ_true; n_per_pair=40)
+        anchor_labels = collect(1:n)
+        y = [a_true + b_true * λ_true[i] + 0.1 * randn(rng) for i in anchor_labels]
+        data = AnchoredData(PairwiseData(wins, anchor_labels), anchor_labels, y)
+
+        f = fit(ThurstoneCaseVAnchored(), MLE(), data)
+        @test f.result isa AnchoredMLEResult
+        @test abs(sum(strengths(f))) < 1e-8
+        cal = calibration(f)
+        @test abs(cal.a - a_true) < 0.5
+        @test abs(cal.b - b_true) < 0.6
+        @test cal.σ² > 0
+        preds = predict(f)
+        @test length(preds) == n
+        @test issorted(preds)
+        lo, hi = predict(f, 5; prob=0.95)
+        @test lo < preds[5] < hi
+        @test predict(f, 5) ≈ preds[5]
+        p = probability(f, n, 1)
+        @test p > 0.5
+        @test probability(f, 1, n) ≈ 1 - p atol=1e-10
+        @test isfinite(loglikelihood(f))
+    end
+
+    @testset "ThurstoneCaseVAnchored — Bayesian recovery" begin
+        rng = MersenneTwister(41)
+        n = 10
+        λ_true = collect(range(-1.5, 1.5, length=n)); λ_true .-= sum(λ_true) / n
+        a_true, b_true = 5.0, 3.0
+        wins = _simulate_thurstone_data(rng, λ_true; n_per_pair=40)
+        y = [a_true + b_true * λ_true[i] + 0.1 * randn(rng) for i in 1:n]
+        data = AnchoredData(PairwiseData(wins, collect(1:n)), collect(1:n), y)
+
+        f = fit(ThurstoneCaseVAnchored(), Bayesian(n_samples=600, n_burnin=300, thin=2),
+                data; rng=rng)
+        @test f.result isa AnchoredMCMCSamples
+        @test size(f.result.λ_samples) == (600, n)
+        @test sortperm(posterior_mean(f)) == sortperm(λ_true)
+        cal = calibration(f)
+        @test abs(cal.a - a_true) < 0.6
+        @test abs(cal.b - b_true) < 0.7
+        draws = predict(f, 5; rng=rng)
+        @test length(draws) == 600 && all(isfinite, draws)
+        lo, hi = predict(f, 5; prob=0.95, rng=rng)
+        @test lo < hi
+        p = probability(f, n, 1)
+        @test p > 0.5
+        @test probability(f, 1, n) ≈ 1 - p atol=1e-10
+        @test length(mcmc_loglikelihoods(f)) == 600
+    end
+
+    @testset "BradleyTerryAnchored — MLE recovery" begin
+        rng = MersenneTwister(17)
+        n = 10
+        λ_true = collect(range(-1.5, 1.5, length=n)); λ_true .-= sum(λ_true) / n
+        a_true, b_true = 4.0, 2.0
+        wins = zeros(Int, n, n)
+        for i in 1:n, j in 1:n
+            i == j && continue
+            p = 1 / (1 + exp(-(λ_true[i] - λ_true[j])))
+            for _ in 1:25
+                rand(rng) < p && (wins[i, j] += 1)
+            end
+        end
+        y = [a_true + b_true * λ_true[i] + 0.1 * randn(rng) for i in 1:n]
+        data = AnchoredData(PairwiseData(wins, collect(1:n)), collect(1:n), y)
+
+        f = fit(BradleyTerryAnchored(), MLE(), data)
+        @test f.result isa AnchoredMLEResult
+        @test abs(sum(strengths(f))) < 1e-8
+        cal = calibration(f)
+        @test abs(cal.a - a_true) < 0.5
+        @test abs(cal.b - b_true) < 0.6
+        @test issorted(predict(f))
+        p = probability(f, n, 1)
+        @test p > 0.5
+        @test probability(f, 1, n) ≈ 1 - p atol=1e-10
+        @test probability(f, 1, 2) ≈ 1 / (1 + exp(-(strengths(f)[1] - strengths(f)[2])))
+    end
+
+    @testset "Covariate ThurstoneCaseV MLE recovery" begin
+        rng = MersenneTwister(2025)
+        βtrue = [1.5, -1.0, 0.0]
+        cd, λtrue = _simulate_thurstone_covariate_data(rng, 45, βtrue; n_per_pair=16)
+        f = fit(ThurstoneCaseVCovariates(), MLE(), cd)
+        @test f.converged
+        @test isapprox(coef(f), βtrue; atol=0.4)
+        λ̂ = strengths(f)
+        @test sum(λ̂) ≈ 0.0 atol=1e-8
+        @test cor(λ̂, λtrue) > 0.95
+        @test fit(ThurstoneCaseVCovariates(), cd).converged
+        @test probability(f, "item1", "item2") ≈ probability(f, 1, 2)
+        @test 0.0 < probability(f, 1, 2) < 1.0
+        @test size(f.result.vcov) == (3, 3)
+        @test all(diag(f.result.vcov) .> 0)
+    end
+
+    @testset "Covariate ThurstoneCaseV one-hot reproduces plain Thurstone" begin
+        wins = [0 9 6; 3 0 8; 4 5 0]
+        data = PairwiseData(wins, ["A", "B", "C"])
+        Z = [0.0 0.0; 1.0 0.0; 0.0 1.0]
+        cd = CovariateData(data, Z, [:I2, :I3])
+        fcov = fit(ThurstoneCaseVCovariates(), MLE(), cd)
+        ftcv = fit(ThurstoneCaseV(), MLE(), data)
+        @test isapprox(strengths(fcov), strengths(ftcv); atol=1e-4)
+    end
+
+    @testset "Covariate ThurstoneCaseV Bayesian (Normal)" begin
+        rng = MersenneTwister(99)
+        βtrue = [1.2, -0.8]
+        cd, _ = _simulate_thurstone_covariate_data(rng, 40, βtrue; n_per_pair=16)
+        f = fit(ThurstoneCaseVCovariates(), Bayesian(n_samples=800, n_burnin=300),
+                cd; rng=MersenneTwister(1))
+        @test isapprox(coef(f), βtrue; atol=0.4)
+        @test length(strengths(f)) == 40
+        lo, hi = credible_interval(f, 1)
+        @test lo < hi
+        @test mcmc_loglikelihoods(f) isa Vector{Float64}
+        @test 0.0 < probability(f, 1, 2) < 1.0
+        cib = confint(f; level=0.9)
+        @test cib[1, 1] > 0 && cib[2, 2] < 0
+    end
+
+    @testset "Covariate ThurstoneCaseV Horseshoe & Spike-slab" begin
+        rng = MersenneTwister(123)
+        βtrue = [2.0, -2.0, 0.0, 0.0]
+        cd, _ = _simulate_thurstone_covariate_data(rng, 45, βtrue; n_per_pair=16)
+
+        fh = fit(ThurstoneCaseVCovariates(), Bayesian(n_samples=800, n_burnin=400),
+                 cd, HorseshoePrior(); rng=MersenneTwister(5))
+        β̂ = coef(fh)
+        @test minimum(abs.(β̂[1:2])) > 1.0
+        @test all(abs.(β̂[3:4]) .< 0.5)
+
+        fs = fit(ThurstoneCaseVCovariates(), Bayesian(n_samples=800, n_burnin=400),
+                 cd, SpikeSlabPrior(); rng=MersenneTwister(6))
+        pip = collect(values(inclusion_probabilities(fs)))
+        @test pip[1] > 0.8 && pip[2] > 0.8
+        @test pip[3] < 0.5 && pip[4] < 0.5
+    end
+
+    @testset "Covariate ThurstoneCaseV Stepwise selection" begin
+        rng = MersenneTwister(555)
+        βtrue = [1.8, -1.5, 0.0, 0.0, 0.0]
+        cd, _ = _simulate_thurstone_covariate_data(rng, 50, βtrue; n_per_pair=18)
+        f = fit(ThurstoneCaseVCovariates(), StepwiseMLE(direction=:both, criterion=:BIC), cd)
+        @test sort(f.result.selected) == [1, 2]
+        @test length(coef(f)) == 2
+        @test !isempty(f.result.trace)
+    end
+
+    # ─── Rater heterogeneity and intransitivity ──────────────────────────────
+
+    # Simulate rater-tagged data: rater r follows BT with reliability qtrue[r]
+    # and otherwise guesses at random.
+    function _simulate_rater_data(rng, K, λtrue, qtrue; n_per=4)
+        M = length(qtrue)
+        items = ["item" * lpad(i, 2, '0') for i in 1:K]
+        raters = ["r$r" for r in 1:M]
+        ws = String[]; ls = String[]; wh = String[]
+        for r in 1:M, i in 1:K, j in (i + 1):K
+            for _ in 1:n_per
+                p = qtrue[r] / (1 + exp(-(λtrue[i] - λtrue[j]))) + (1 - qtrue[r]) / 2
+                if rand(rng) < p
+                    push!(ws, items[i]); push!(ls, items[j])
+                else
+                    push!(ws, items[j]); push!(ls, items[i])
+                end
+                push!(wh, raters[r])
+            end
+        end
+        return RaterData(ws, ls, wh)
+    end
+
+    # Simulate data with a planted skew-symmetric intransitivity Γ. Uses the
+    # expected (rounded) win counts rather than sampling, so the recovery is
+    # reproducible across Julia/RNG versions (`rng` is accepted but unused).
+    function _simulate_intransitive_data(rng, K, λtrue, Γ; n_per_pair=25)
+        wins = zeros(Int, K, K)
+        for i in 1:K, j in (i + 1):K
+            p = 1 / (1 + exp(-(λtrue[i] - λtrue[j] + Γ[i, j])))
+            w = round(Int, n_per_pair * p)
+            wins[i, j] = w
+            wins[j, i] = n_per_pair - w
+        end
+        return PairwiseData(wins, ["item" * lpad(i, 2, '0') for i in 1:K])
+    end
+
+    @testset "RaterData construction" begin
+        rd = RaterData(["A", "C", "B"], ["B", "A", "C"], ["r1", "r1", "r2"])
+        @test length(rd.winner) == 3
+        @test sort(rd.labels) == ["A", "B", "C"]
+        @test length(rd.raters) == 2
+        @test_throws DimensionMismatch RaterData(["A"], ["B", "C"], ["r1", "r1"])
+        @test_throws ArgumentError RaterData(["A", "A"], ["A", "B"], ["r1", "r1"])  # self-comparison
+        rd2 = RaterData(["A", "B"], ["B", "A"], ["r1", "r2"];
+                        item_labels=["A", "B"], rater_labels=["r1", "r2"])
+        @test rd2.labels == ["A", "B"]
+        @test_throws ArgumentError RaterData(["A", "B"], ["B", "A"], ["r1", "x"];
+                                             rater_labels=["r1", "r2"])
+    end
+
+    @testset "BetaPrior and bundled priors" begin
+        @test BetaPrior().a == 1.0 && BetaPrior().b == 1.0
+        @test_throws ArgumentError BetaPrior(-1.0, 1.0)
+        @test_throws ArgumentError BetaPrior(1.0, 0.0)
+        rp = RaterHeterogeneityPrior()
+        @test rp.λ_prior === nothing && rp.q_prior isa BetaPrior
+        ip = IntransitivityPrior()
+        @test ip.λ_prior === nothing && ip.σ²γ_prior isa InverseGammaPrior
+    end
+
+    @testset "Rater-heterogeneity BradleyTerry MLE recovery" begin
+        rng = MersenneTwister(3)
+        K = 10
+        λtrue = collect(range(2.5, -2.5; length=K))
+        qtrue = [0.95, 0.9, 0.85, 0.25, 0.15, 0.05]
+        rd = _simulate_rater_data(rng, K, λtrue, qtrue; n_per=4)
+
+        f = fit(BradleyTerryRaterHeterogeneity(), MLE(), rd)
+        @test f.converged
+        λ̂ = strengths(f)
+        @test sum(λ̂) ≈ 0.0 atol=1e-8
+        @test cor(λ̂, λtrue) > 0.85
+
+        q = rater_reliabilities(f)
+        @test keys(q) == (:r1, :r2, :r3, :r4, :r5, :r6)
+        qv = collect(values(q))
+        @test all(0.0 .<= qv .<= 1.0)
+        @test mean(qv[1:3]) > mean(qv[4:6]) + 0.3        # reliable raters stand out
+
+        @test fit(BradleyTerryRaterHeterogeneity(), rd).converged    # default-method overload
+        i1 = findfirst(==("item01"), f.labels)   # label order is data-dependent
+        i2 = findfirst(==("item02"), f.labels)
+        @test probability(f, "item01", "item02") ≈ probability(f, i1, i2)
+        @test 0.0 < probability(f, 1, 2) < 1.0
+        @test_throws ArgumentError probability(f, "item01", "nope")
+        @test loglikelihood(f) <= 0.0
+    end
+
+    @testset "Rater-heterogeneity BradleyTerry Bayesian recovery" begin
+        rng = MersenneTwister(8)
+        K = 10
+        λtrue = collect(range(2.5, -2.5; length=K))
+        qtrue = [0.92, 0.88, 0.2, 0.1]
+        rd = _simulate_rater_data(rng, K, λtrue, qtrue; n_per=5)
+
+        f = fit(BradleyTerryRaterHeterogeneity(), Bayesian(n_samples=800, n_burnin=400),
+                rd; rng=MersenneTwister(1))
+        @test length(strengths(f)) == K
+        @test length(posterior_std(f)) == K
+        @test cor(posterior_mean(f), λtrue) > 0.8
+        lo, hi = credible_interval(f, 1)
+        @test lo < hi
+        @test mcmc_loglikelihoods(f) isa Vector{Float64}
+        qv = collect(values(rater_reliabilities(f)))
+        @test all(0.0 .<= qv .<= 1.0)
+        @test mean(qv[1:2]) > mean(qv[3:4]) + 0.2
+        @test 0.0 < probability(f, 1, 2) < 1.0
+    end
+
+    @testset "Intransitive BradleyTerry MLE recovery" begin
+        rng = MersenneTwister(11)
+        K = 8
+        λtrue = collect(range(2.0, -2.0; length=K))
+        Γ = zeros(K, K); g = 3.0
+        for (a, b) in ((6, 7), (7, 8), (8, 6)); Γ[a, b] += g; Γ[b, a] -= g; end
+        data = _simulate_intransitive_data(rng, K, λtrue, Γ; n_per_pair=25)
+
+        f = fit(BradleyTerryIntransitive(), MLE(), data)
+        @test f.converged
+        λ̂ = strengths(f)
+        @test sum(λ̂) ≈ 0.0 atol=1e-8
+        @test cor(λ̂, λtrue) > 0.9
+
+        Γ̂ = intransitivity(f)
+        @test maximum(abs.(Γ̂ .+ transpose(Γ̂))) < 1e-10      # skew-symmetric
+        cyc = [abs(Γ̂[6, 7]), abs(Γ̂[7, 8]), abs(Γ̂[6, 8])]
+        off = [abs(Γ̂[i, j]) for i in 1:K for j in (i + 1):K
+               if !((i, j) in ((6, 7), (7, 8), (6, 8)))]
+        @test minimum(cyc) > 1.0
+        @test minimum(cyc) > maximum(off)                    # planted cycle stands out
+
+        # γ flips the order: item 8 beats item 6 despite a lower strength
+        @test λ̂[8] < λ̂[6]
+        @test probability(f, "item08", "item06") > 0.5
+        @test probability(f, 8, 6) ≈ probability(f, "item08", "item06")
+        @test_throws ArgumentError probability(f, "item08", "nope")
+
+        @test fit(BradleyTerryIntransitive(), data).converged   # default-method overload
+        fsmall = fit(BradleyTerryIntransitive(), MLE(), data; σ²γ=0.05)
+        @test maximum(abs, intransitivity(fsmall)) < maximum(abs, intransitivity(f))
+        @test_throws ArgumentError fit(BradleyTerryIntransitive(), MLE(), data; σ²γ=-1.0)
+    end
+
+    @testset "Intransitive BradleyTerry Bayesian recovery" begin
+        rng = MersenneTwister(11)
+        K = 8
+        λtrue = collect(range(2.0, -2.0; length=K))
+        Γ = zeros(K, K); g = 3.0
+        for (a, b) in ((6, 7), (7, 8), (8, 6)); Γ[a, b] += g; Γ[b, a] -= g; end
+        data = _simulate_intransitive_data(rng, K, λtrue, Γ; n_per_pair=25)
+
+        f = fit(BradleyTerryIntransitive(), Bayesian(n_samples=800, n_burnin=400),
+                data; rng=MersenneTwister(2))
+        @test length(strengths(f)) == K
+        @test cor(posterior_mean(f), λtrue) > 0.9
+        @test length(posterior_std(f)) == K
+        lo, hi = credible_interval(f, 1)
+        @test lo < hi
+        @test mcmc_loglikelihoods(f) isa Vector{Float64}
+        Γ̄ = intransitivity(f)
+        @test maximum(abs.(Γ̄ .+ transpose(Γ̄))) < 1e-10
+        cyc = [abs(Γ̄[6, 7]), abs(Γ̄[7, 8]), abs(Γ̄[6, 8])]
+        @test minimum(cyc) > 1.0
+        @test 0.0 < probability(f, 1, 2) < 1.0
+        @test all(f.result.σ²γ_samples .> 0)
+    end
+
+    # ─── Model checking: diagnostics and comparison ──────────────────────────
+
+    # Separable pairwise data on K items with `npp` comparisons per pair.
+    function _simulate_separable(rng, K; npp=12, spread=2.5)
+        λ = collect(range(spread, -spread, length=K))
+        wins = zeros(Int, K, K)
+        for i in 1:K, j in (i + 1):K
+            p = 1.0 / (1.0 + exp(-(λ[i] - λ[j])))
+            for _ in 1:npp
+                rand(rng) < p ? (wins[i, j] += 1) : (wins[j, i] += 1)
+            end
+        end
+        return PairwiseData(wins, ["it$i" for i in 1:K]), λ
+    end
+
+    @testset "StatsAPI conformance: dof / nobs / coef" begin
+        rng = MersenneTwister(1)
+        data, _ = _simulate_separable(rng, 6)
+        bt = fit(BradleyTerry(), MLE(), data)
+        @test bt isa ComparativeJudgement.StatsAPI.StatisticalModel
+        @test dof(bt) == 5                # K - 1
+        @test nobs(bt) == sum(data.wins)
+        @test coef(bt) == strengths(bt)   # strengths are the BT coefficients
+        @test coefnames(bt) == string.(data.labels)
+        cd, _ = _simulate_covariate_data(rng, 6, [1.0, -1.0])
+        cm = fit(BradleyTerryCovariates(), MLE(), cd)
+        @test dof(cm) == 2
+        @test nobs(cm) == sum(cd.data.wins)
+        @test length(coef(cm)) == 2 && coefnames(cm) == ["x1", "x2"]
+    end
+
+    @testset "loglikelihood scalar + pointwise" begin
+        rng = MersenneTwister(2)
+        data, _ = _simulate_separable(rng, 5)
+        bt = fit(BradleyTerry(), MLE(), data)
+        pw = loglikelihood(bt, :)
+        @test pw isa Vector
+        @test sum(pw) ≈ loglikelihood(bt) atol = 1e-8       # StatsAPI identity
+        bayes = fit(BradleyTerry(), Bayesian(n_samples=200, n_burnin=100), data; rng=rng)
+        @test loglikelihood(bayes, :) isa Vector
+        @test sum(loglikelihood(bayes, :)) ≈ loglikelihood(bayes) atol = 1e-8
+        @test length(mcmc_loglikelihoods(bayes)) == 200     # per-draw trace
+        @test_throws ArgumentError mcmc_loglikelihoods(bt)
+    end
+
+    @testset "AIC / BIC" begin
+        rng = MersenneTwister(3)
+        data, _ = _simulate_separable(rng, 7)
+        bt = fit(BradleyTerry(), MLE(), data)
+        @test aic(bt) ≈ -2 * loglikelihood(bt) + 2 * dof(bt) atol = 1e-6
+        @test bic(bt) ≈ -2 * loglikelihood(bt) + log(nobs(bt)) * dof(bt) atol = 1e-6
+        @test deviance(bt) ≈ -2 * loglikelihood(bt) atol = 1e-6
+        @test isfinite(aicc(bt))
+        # Bayesian fits are redirected to waic/loo.
+        bayes = fit(BradleyTerry(), Bayesian(n_samples=100, n_burnin=50), data; rng=rng)
+        @test_throws ArgumentError aic(bayes)
+        @test_throws ArgumentError bic(bayes)
+    end
+
+    @testset "WAIC / LOO" begin
+        rng = MersenneTwister(4)
+        data, _ = _simulate_separable(rng, 8)
+        bayes = fit(BradleyTerry(), Bayesian(n_samples=800, n_burnin=400), data; rng=rng)
+        w = waic(bayes)
+        l = loo(bayes)
+        @test w isa WAICResult && l isa LOOResult
+        @test isfinite(w.elpd_waic) && isfinite(l.elpd_loo)
+        @test w.p_waic > 0 && l.p_loo > 0
+        @test w.waic ≈ -2 * w.elpd_waic
+        @test l.looic ≈ -2 * l.elpd_loo
+        @test all(isfinite, l.pareto_k)
+        @test abs(w.elpd_waic - l.elpd_loo) < 2.0       # close on a well-behaved fit
+        # MLE fits have no posterior draws.
+        mle = fit(BradleyTerry(), MLE(), data)
+        @test_throws ArgumentError waic(mle)
+        @test_throws ArgumentError loo(mle)
+    end
+
+    @testset "SSR" begin
+        rng = MersenneTwister(5)
+        data, _ = _simulate_separable(rng, 8; npp=16)
+        bt = fit(BradleyTerry(), MLE(), data)
+        s_mle = ssr(bt)
+        @test 0.0 < s_mle < 1.0
+        @test s_mle > 0.8                                  # strongly separated items
+        bayes = fit(BradleyTerry(), Bayesian(n_samples=600, n_burnin=300), data; rng=rng)
+        @test abs(ssr(bayes) - s_mle) < 0.05               # posterior SD ≈ observed-info SE
+        th = fit(ThurstoneCaseV(), MLE(), data)
+        @test 0.0 < ssr(th) < 1.0
+    end
+
+    @testset "split-half reliability" begin
+        rng = MersenneTwister(6)
+        data, _ = _simulate_separable(rng, 8; npp=20)
+        r = split_half_reliability(BradleyTerry(), MLE(), data; n_splits=30, rng=rng)
+        @test r isa ReliabilityResult
+        @test r.n_splits == 30 && length(r.per_split) == 30
+        @test r.mean > 0.7                                 # reproducible scale
+        @test r.spearman_brown >= r.mean                   # step-up never lowers it
+    end
+
+    @testset "train/test split and k-fold" begin
+        rng = MersenneTwister(7)
+        data, _ = _simulate_separable(rng, 6)
+        tr, te = train_test_split(data; frac=0.7, rng=rng)
+        @test sum(tr.wins) + sum(te.wins) == sum(data.wins)  # partition conserves comparisons
+        @test tr.labels == data.labels
+        folds = kfold(data; k=5, rng=rng)
+        @test length(folds) == 5
+        @test sum(sum(te.wins) for (_, te) in folds) == sum(data.wins)
+    end
+
+    @testset "cross-validated log loss" begin
+        rng = MersenneTwister(8)
+        # Data generated from covariates: the true covariate should predict better
+        # out of sample than a random one.
+        K = 14; Ztrue = randn(rng, K, 1); λ = Ztrue[:, 1] .* 2.0
+        wins = zeros(Int, K, K)
+        for i in 1:K, j in (i + 1):K
+            p = 1.0 / (1.0 + exp(-(λ[i] - λ[j])))
+            for _ in 1:8
+                rand(rng) < p ? (wins[i, j] += 1) : (wins[j, i] += 1)
+            end
+        end
+        labels = ["i$i" for i in 1:K]
+        cd_true = CovariateData(PairwiseData(wins, labels), Ztrue, [:x])
+        cd_rand = CovariateData(PairwiseData(wins, labels), randn(rng, K, 1), [:x])
+        cv_true = crossvalidate(BradleyTerryCovariates(), MLE(), cd_true; k=5, rng=rng)
+        cv_rand = crossvalidate(BradleyTerryCovariates(), MLE(), cd_rand; k=5, rng=rng)
+        @test cv_true isa CVResult
+        @test cv_true.mean_logloss < cv_rand.mean_logloss
+    end
+
+    @testset "likelihood-ratio test" begin
+        rng = MersenneTwister(9)
+        K = 12; Z = randn(rng, K, 3); βt = [1.8, -1.2, 0.0]; λ = Z * βt
+        wins = zeros(Int, K, K)
+        for i in 1:K, j in (i + 1):K
+            p = 1.0 / (1.0 + exp(-(λ[i] - λ[j])))
+            for _ in 1:10
+                rand(rng) < p ? (wins[i, j] += 1) : (wins[j, i] += 1)
+            end
+        end
+        labels = ["i$i" for i in 1:K]
+        full = fit(BradleyTerryCovariates(), MLE(),
+                   CovariateData(PairwiseData(wins, labels), Z, [:x1, :x2, :x3]))
+        drop_noise = fit(BradleyTerryCovariates(), MLE(),
+                         CovariateData(PairwiseData(wins, labels), Z[:, 1:2], [:x1, :x2]))
+        drop_real = fit(BradleyTerryCovariates(), MLE(),
+                        CovariateData(PairwiseData(wins, labels), Z[:, 1:1], [:x1]))
+        t1 = lrtest(drop_noise, full)                      # drop x3 (noise)
+        @test t1 isa LRTResult
+        @test t1.df == 1
+        @test t1.statistic >= 0.0
+        @test t1.pvalue > 0.05                             # not significant
+        t2 = lrtest(drop_real, drop_noise)                 # drop x2 (real)
+        @test t2.pvalue < 0.01                             # significant
+        @test_throws ArgumentError lrtest(full, drop_noise)  # not nested (wrong order)
+        bt = fit(BradleyTerry(), MLE(), PairwiseData(wins, labels))
+        @test_throws ArgumentError lrtest(bt, bt)          # not covariate fits
+    end
+
+    @testset "rank correlation and decision agreement" begin
+        rng = MersenneTwister(10)
+        data, _ = _simulate_separable(rng, 10)
+        bt = fit(BradleyTerry(), MLE(), data)
+        th = fit(ThurstoneCaseV(), MLE(), data)
+        @test rank_correlation(bt, bt) ≈ 1.0               # self-correlation
+        @test rank_correlation(bt, th) > 0.95              # link invariance
+        @test rank_correlation(bt, th; method=:kendall) > 0.9
+        @test rank_correlation(bt, th; method=:pearson) > 0.95
+        @test_throws ArgumentError rank_correlation(bt, th; method=:bogus)
+        @test top_k_agreement(bt, bt, 3) == 1.0
+        @test 0.0 <= top_k_agreement(bt, th, 5) <= 1.0
+        ba = boundary_agreement(bt, bt, 0.0)
+        @test ba.agreement == 1.0
+        @test ba.both_above + ba.both_below == length(data.labels)
+    end
+
+    @testset "compare table" begin
+        rng = MersenneTwister(11)
+        data, _ = _simulate_separable(rng, 8)
+        btb = fit(BradleyTerry(), Bayesian(n_samples=500, n_burnin=250), data; rng=rng)
+        thb = fit(ThurstoneCaseV(), Bayesian(n_samples=500, n_burnin=250), data; rng=rng)
+        tbl = compare(btb, thb; criterion=:loo, names=["BT", "TCV"])
+        @test tbl isa ModelComparisonTable
+        @test length(tbl.values) == 2
+        @test tbl.Δ[1] == 0.0                              # best model first
+        @test issorted(tbl.values)
+        @test all(tbl.Δ .>= 0.0)
+        @test_throws ArgumentError compare(btb, thb; criterion=:bogus)
     end
 
 end
