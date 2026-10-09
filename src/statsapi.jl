@@ -150,21 +150,6 @@ _strength_draws(f::FittedComparativeModel{<:RaterHeterogeneity, Bayesian}) =
 _strength_draws(f::FittedComparativeModel{<:Intransitive, Bayesian}) =
     (S = f.result.λ_samples; S .- mean(S, dims=2))
 
-# Central-difference Hessian of `f` at `x` (small dimension).
-function _hessian_fd(f, x::Vector{Float64}; h::Float64=1e-4)
-    n = length(x)
-    H = Matrix{Float64}(undef, n, n)
-    for i in 1:n, j in i:n
-        xpp = copy(x); xpp[i] += h; xpp[j] += h
-        xpm = copy(x); xpm[i] += h; xpm[j] -= h
-        xmp = copy(x); xmp[i] -= h; xmp[j] += h
-        xmm = copy(x); xmm[i] -= h; xmm[j] -= h
-        H[i, j] = (f(xpp) - f(xpm) - f(xmp) + f(xmm)) / (4 * h^2)
-        H[j, i] = H[i, j]
-    end
-    return H
-end
-
 """
     SingularInformationError(msg)
 
@@ -180,28 +165,30 @@ end
 
 Base.showerror(io::IO, e::SingularInformationError) = print(io, "SingularInformationError: ", e.msg)
 
+_singular_information(cause::AbstractString) = SingularInformationError(
+    "observed-information covariance is singular ($cause): the comparison " *
+    "design does not identify all Bradley–Terry/Thurstone strengths. Fit " *
+    "with Bayesian inference for regularised vcov/stderror/confint.")
+
 # Observed-information covariance of the centred strengths for a plain MLE fit.
-# The observed-information matrix is singular whenever the design fails to
-# identify all strengths (a disconnected win-graph, or undefeated/winless items);
-# we surface that as a domain-specific `SingularInformationError` explaining the
-# cause rather than leaking a bare `LinearAlgebra.SingularException`.
+# The information matrix is singular whenever the design fails to identify all
+# strengths (a disconnected win-graph, or undefeated/winless items). The fitted
+# strengths then diverge and the Hessian at the optimiser's stopping point is only
+# near-singular, so the design is checked up front rather than relying on the
+# inversion to fail; either way the cause is surfaced as a domain-specific
+# `SingularInformationError` instead of a bare `LinearAlgebra.SingularException`.
 function _strength_vcov(f::FittedComparativeModel{<:Union{BradleyTerry, ThurstoneCaseV}, MLE})
     K = length(f.labels)
+    detail = _degeneracy_detail(f.data)
+    detail === nothing || throw(_singular_information(detail))
     θ̂ = collect(float.(Optim.minimizer(f.result)))
-    wins = _pairwise(f.data).wins
-    negll = f.model isa BradleyTerry ? (x -> _bt_neg_loglik(x, wins)) :
-                                       (x -> _tcv_neg_loglik(x, wins))
-    H = _hessian_fd(negll, θ̂)
+    agg = _aggregate_pairs(_pairwise(f.data).wins, K)
+    H = f.model isa BradleyTerry ? _bt_neg_hessian(θ̂, agg) : _tcv_neg_hessian(θ̂, agg)
     Σfree = try
         inv(Symmetric(H))                                 # covariance of the free strengths
     catch err
         err isa LinearAlgebra.SingularException || rethrow()
-        detail = _degeneracy_detail(f.data)
-        cause = detail === nothing ? "the information matrix is numerically rank-deficient" : detail
-        throw(SingularInformationError(
-            "observed-information covariance is singular ($cause): the comparison " *
-            "design does not identify all Bradley–Terry/Thurstone strengths. Fit " *
-            "with Bayesian inference for regularised vcov/stderror/confint."))
+        throw(_singular_information("the information matrix is numerically rank-deficient"))
     end
     Σfull = zeros(K, K)
     Σfull[2:K, 2:K] .= Σfree

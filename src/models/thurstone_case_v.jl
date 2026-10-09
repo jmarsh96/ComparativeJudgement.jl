@@ -11,37 +11,49 @@ _tcv_check(model::ThurstoneCaseV) = model.distribution === :normal ||
 
 # ─── Maximum likelihood ──────────────────────────────────────────────────────
 
-# Negative probit log-likelihood. λ₁ is fixed at 0 (λ_free holds λ₂..λ_K) for
-# identifiability; strengths() returns the centred estimates.
-function _tcv_neg_loglik(λ_free::AbstractVector, wins::Matrix{Int})
+# Negative probit log-likelihood, summed over the observed pairs. λ₁ is fixed at 0
+# (λ_free holds λ₂..λ_K) for identifiability; strengths() returns the centred
+# estimates.
+function _tcv_neg_loglik(λ_free::AbstractVector, agg::_AggregatedPairData)
     λ = _full_theta(λ_free)
-    n = length(λ)
     ll = zero(eltype(λ))
-    @inbounds for i in 1:n, j in 1:n
-        i == j && continue
-        w = wins[i, j]
-        iszero(w) && continue
-        ll += w * _log_normcdf(λ[i] - λ[j])
+    @inbounds for p in 1:agg.P
+        i, j = agg.pairs[p]
+        d = λ[i] - λ[j]
+        y = agg.yvec[p]
+        ll += y * _log_normcdf(d) + (agg.Nvec[p] - y) * _log_normcdf(-d)
     end
     return -ll
 end
 
-function _tcv_neg_grad!(G::AbstractVector, λ_free::AbstractVector, wins::Matrix{Int})
+function _tcv_neg_grad!(G::AbstractVector, λ_free::AbstractVector, agg::_AggregatedPairData)
     λ = _full_theta(λ_free)
-    n = length(λ)
-    grad = zeros(n)              # full gradient incl. the pinned item 1
-    @inbounds for i in 1:n, j in 1:n
-        i == j && continue
-        w = wins[i, j]
-        iszero(w) && continue
-        h = w * _inv_mills(λ[i] - λ[j])   # ∂ logΦ(λᵢ−λⱼ)/∂(λᵢ−λⱼ) = φ/Φ
-        grad[i] += h
-        grad[j] -= h
-    end
-    @inbounds for k in 2:n
-        G[k - 1] = -grad[k]
+    fill!(G, 0.0)
+    @inbounds for p in 1:agg.P
+        i, j = agg.pairs[p]
+        d = λ[i] - λ[j]
+        y = agg.yvec[p]
+        # ∂ logΦ(d)/∂d = φ/Φ, the inverse Mills ratio
+        h = y * _inv_mills(d) - (agg.Nvec[p] - y) * _inv_mills(-d)
+        i > 1 && (G[i - 1] -= h)
+        j > 1 && (G[j - 1] += h)
     end
     return G
+end
+
+# Observed information for the free strengths: a graph Laplacian over the observed
+# pairs, weighted by −∂² logΦ(d)/∂d² = m(d)·(d + m(d)) per win (m = inverse Mills).
+function _tcv_neg_hessian(λ_free::AbstractVector, agg::_AggregatedPairData)
+    λ = _full_theta(λ_free)
+    H = zeros(length(λ_free), length(λ_free))
+    @inbounds for p in 1:agg.P
+        i, j = agg.pairs[p]
+        d = λ[i] - λ[j]
+        y = agg.yvec[p]
+        m₊ = _inv_mills(d); m₋ = _inv_mills(-d)
+        _add_pair_weight!(H, i, j, y * m₊ * (d + m₊) + (agg.Nvec[p] - y) * m₋ * (m₋ - d))
+    end
+    return H
 end
 
 # Aggregated probit log-likelihood (per-pair binomial form), for the Bayesian recorder.
@@ -50,7 +62,7 @@ function _tcv_loglik(λ::Vector{Float64}, agg::_AggregatedPairData)
     @inbounds for p in 1:agg.P
         i, j = agg.pairs[p]
         d = λ[i] - λ[j]
-        y = agg.κ[p] + agg.Nvec[p] / 2       # wins of i in this pair
+        y = agg.yvec[p]                      # wins of i in this pair
         ll += y * _log_normcdf(d) + (agg.Nvec[p] - y) * _log_normcdf(-d)
     end
     return ll
@@ -65,12 +77,12 @@ for identifiability; [`strengths`](@ref) returns the centred estimates.
 """
 function fit(model::ThurstoneCaseV, method::MLE, data::PairwiseData{L}) where {L}
     _tcv_check(model)
-    wins = data.wins
     n = length(data.labels)
     n >= 2 || throw(ArgumentError("Need at least 2 items to fit ThurstoneCaseV, got $n"))
     _warn_degenerate_design(data)
-    f(λ_free) = _tcv_neg_loglik(λ_free, wins)
-    g!(G, λ_free) = _tcv_neg_grad!(G, λ_free, wins)
+    agg = _aggregate_pairs(data.wins, n)
+    f(λ_free) = _tcv_neg_loglik(λ_free, agg)
+    g!(G, λ_free) = _tcv_neg_grad!(G, λ_free, agg)
     result = optimize(f, g!, zeros(n - 1), LBFGS())
     return FittedComparativeModel(
         model, method, result, data.labels, data,
