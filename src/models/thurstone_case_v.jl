@@ -74,15 +74,17 @@ end
 Maximum-likelihood fit of the Thurstone Case V model via L-BFGS on the probit
 log-likelihood. The first item's strength is fixed at zero during optimisation
 for identifiability; [`strengths`](@ref) returns the centred estimates.
+`MLE(ridge=r)` adds a ridge penalty on the centred strengths (see [`MLE`](@ref)).
 """
 function fit(model::ThurstoneCaseV, method::MLE, data::PairwiseData{L}) where {L}
     _tcv_check(model)
     n = length(data.labels)
     n >= 2 || throw(ArgumentError("Need at least 2 items to fit ThurstoneCaseV, got $n"))
-    _warn_degenerate_design(data)
+    ridge = method.ridge
+    iszero(ridge) && _warn_degenerate_design(data)   # a ridge penalty keeps the fit finite
     agg = _aggregate_pairs(data.wins, n)
-    f(λ_free) = _tcv_neg_loglik(λ_free, agg)
-    g!(G, λ_free) = _tcv_neg_grad!(G, λ_free, agg)
+    f(λ_free) = _tcv_neg_loglik(λ_free, agg) + _ridge_penalty(λ_free, ridge)
+    g!(G, λ_free) = _ridge_grad!(_tcv_neg_grad!(G, λ_free, agg), λ_free, ridge)
     result = optimize(f, g!, zeros(n - 1), LBFGS())
     return FittedComparativeModel(
         model, method, result, data.labels, data,

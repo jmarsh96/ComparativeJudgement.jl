@@ -126,6 +126,7 @@ covariate-difference design. [`coef`](@ref) returns the estimated β and
 [`strengths`](@ref) the recovered latent strengths `λ = Zβ`.
 """
 function fit(model::Covariates{BradleyTerry}, method::MLE, cd::CovariateData{L}) where {L}
+    _reject_ridge(method, "covariate")
     K = length(cd.data.labels)
     K >= 2 || throw(ArgumentError("Need at least 2 items to fit covariate BradleyTerry, got $K"))
     agg = _aggregate_covariate_pairs(cd)

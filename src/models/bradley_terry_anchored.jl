@@ -87,7 +87,7 @@ function fit(model::Anchored{BradleyTerry}, method::MLE,
     K >= 2 || throw(ArgumentError("Need at least 2 items to fit BradleyTerryAnchored, got $K"))
     ng = Float64[length(g) for g in data.anchor_groups]
     sum_log_ng = sum(log, ng)
-    mle = fit(BradleyTerry(), MLE(), pdata)
+    mle = fit(BradleyTerry(), method, pdata)
     λ = _full_theta(Optim.minimizer(mle.result))
     λ .-= mean(λ)
     result = _anchored_mle_result(λ, loglikelihood(mle), data.anchor_groups, ng,

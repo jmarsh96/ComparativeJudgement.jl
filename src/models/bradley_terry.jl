@@ -2,6 +2,35 @@ function _full_theta(θ_free::AbstractVector{T}) where {T}
     return vcat(zero(T), θ_free)
 end
 
+# Ridge penalty (ridge/2)·Σᵢ(θᵢ − θ̄)² on the centred strengths, θ = [0; θ_free].
+# Penalising the centred strengths gives the same estimate as penalising Σθᵢ² with
+# every item free (the likelihood is shift-invariant, and centring minimises Σθᵢ²
+# over the shift), while keeping the item-1-pinned parametrisation. Each helper
+# is a no-op when `ridge` is zero.
+function _ridge_penalty(θ_free::AbstractVector, ridge::Float64)
+    iszero(ridge) && return 0.0
+    K = length(θ_free) + 1
+    return ridge / 2 * (sum(abs2, θ_free) - sum(θ_free)^2 / K)
+end
+
+function _ridge_grad!(G::AbstractVector, θ_free::AbstractVector, ridge::Float64)
+    iszero(ridge) && return G
+    θ̄ = sum(θ_free) / (length(θ_free) + 1)
+    @inbounds for k in eachindex(G)
+        G[k] += ridge * (θ_free[k] - θ̄)
+    end
+    return G
+end
+
+function _ridge_hessian!(H::Matrix{Float64}, ridge::Float64)
+    iszero(ridge) && return H
+    H .-= ridge / (size(H, 1) + 1)
+    @inbounds for k in axes(H, 1)
+        H[k, k] += ridge
+    end
+    return H
+end
+
 # Comparison data aggregated to the observed pairs: one entry per unordered pair
 # (i < j) that was compared at least once. Everything downstream — the MLE
 # objective, its gradient and Hessian, and the Gibbs samplers — iterates over
@@ -116,16 +145,18 @@ end
 
 Maximum-likelihood fit of the Bradley–Terry model via L-BFGS. The first
 item's strength is fixed at zero during optimisation for identifiability;
-[`strengths`](@ref) returns the centred estimates.
+[`strengths`](@ref) returns the centred estimates. `MLE(ridge=r)` adds a ridge
+penalty on the centred log-strengths (see [`MLE`](@ref)).
 """
 function fit(model::BradleyTerry, method::MLE, data::PairwiseData{L}) where {L}
     n = length(data.labels)
     n >= 2 || throw(ArgumentError("Need at least 2 items to fit BradleyTerry, got $n"))
-    _warn_degenerate_design(data)
+    ridge = method.ridge
+    iszero(ridge) && _warn_degenerate_design(data)   # a ridge penalty keeps the fit finite
     agg = _aggregate_pairs(data.wins, n)
     θ₀ = zeros(n - 1)
-    f(θ_free) = _bt_neg_loglik(θ_free, agg)
-    g!(G, θ_free) = _bt_neg_grad!(G, θ_free, agg)
+    f(θ_free) = _bt_neg_loglik(θ_free, agg) + _ridge_penalty(θ_free, ridge)
+    g!(G, θ_free) = _ridge_grad!(_bt_neg_grad!(G, θ_free, agg), θ_free, ridge)
     result = optimize(f, g!, θ₀, LBFGS())
     return FittedComparativeModel(
         model, 

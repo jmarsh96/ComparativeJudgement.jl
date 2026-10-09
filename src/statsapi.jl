@@ -177,13 +177,19 @@ _singular_information(cause::AbstractString) = SingularInformationError(
 # near-singular, so the design is checked up front rather than relying on the
 # inversion to fail; either way the cause is surfaced as a domain-specific
 # `SingularInformationError` instead of a bare `LinearAlgebra.SingularException`.
+# A ridge-penalised fit is always finite, so it skips the design check and inverts
+# the penalised information instead.
 function _strength_vcov(f::FittedComparativeModel{<:Union{BradleyTerry, ThurstoneCaseV}, MLE})
     K = length(f.labels)
-    detail = _degeneracy_detail(f.data)
-    detail === nothing || throw(_singular_information(detail))
+    ridge = f.method.ridge
+    if iszero(ridge)
+        detail = _degeneracy_detail(f.data)
+        detail === nothing || throw(_singular_information(detail))
+    end
     θ̂ = collect(float.(Optim.minimizer(f.result)))
     agg = _aggregate_pairs(_pairwise(f.data).wins, K)
     H = f.model isa BradleyTerry ? _bt_neg_hessian(θ̂, agg) : _tcv_neg_hessian(θ̂, agg)
+    _ridge_hessian!(H, ridge)
     Σfree = try
         inv(Symmetric(H))                                 # covariance of the free strengths
     catch err

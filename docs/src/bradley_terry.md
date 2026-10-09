@@ -87,6 +87,25 @@ The estimates scatter around the diagonal with no systematic distortion —
 the spread is sampling noise from ~40 comparisons per item (the fit agrees
 with R's `BradleyTerry2` to solver precision on this data).
 
+### Ridge penalty
+
+The plain MLE is finite only when the win-graph is strongly connected (see
+[`design_connectivity`](@ref)): an item that won — or lost — every comparison
+has its strength pushed to ``\pm\infty``. Passing `ridge` to [`MLE`](@ref) adds
+the penalty ``\tfrac{r}{2}\sum_i \lambda_i^2`` on the centred strengths to the
+negative log-likelihood, which always gives a unique finite estimate. It is the
+posterior mode under independent ``N(0, 1/r)`` priors, so `ridge = 0.01` matches a
+prior standard deviation of 10 and barely moves well-identified strengths:
+
+```@example bt
+fitted_ridge = fit(BradleyTerry(), MLE(ridge=0.01), data)
+maximum(abs, strengths(fitted_ridge) .- λ̂)
+```
+
+No penalty is applied unless `ridge` is given. The same option works for
+[`ThurstoneCaseV`](@ref) and the anchored models; standard errors for a
+penalised fit come from the penalised information.
+
 Ranking the items is a `sortperm` away. With only 600 comparisons the
 recovered order is close to the truth (`S30`, `S29`, …, `S01`) but adjacent
 items — separated by just 0.10 on the latent scale — do swap:
