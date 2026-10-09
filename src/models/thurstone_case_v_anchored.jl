@@ -60,6 +60,7 @@ function fit(model::Anchored{ThurstoneCaseV}, method::Bayesian,
     sum_log_ng = sum(log, ng)
 
     agg = _aggregate_pairs(wins, K)
+    upper_zero = _upper_zero(agg)
 
     # Pre-computation (once)
     τ²        = prior.τ²
@@ -113,7 +114,7 @@ function fit(model::Anchored{ThurstoneCaseV}, method::Bayesian,
     for s in 1:total
         # λ | u, β, σ² — precision τ²I + XᵀNX + (b²/σ²)·MᵀWM (the comparison part
         # XᵀNX is constant under the probit augmentation).
-        @inbounds for (i, j) in agg.upper_zero
+        @inbounds for (i, j) in upper_zero
             V_buf[i, j] = 0.0
         end
         @inbounds for i in 1:K

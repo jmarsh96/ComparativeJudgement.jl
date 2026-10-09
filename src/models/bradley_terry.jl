@@ -2,35 +2,113 @@ function _full_theta(θ_free::AbstractVector{T}) where {T}
     return vcat(zero(T), θ_free)
 end
 
-function _bt_neg_loglik(θ_free::AbstractVector, wins::Matrix{Int})
+# Comparison data aggregated to the observed pairs: one entry per unordered pair
+# (i < j) that was compared at least once. Everything downstream — the MLE
+# objective, its gradient and Hessian, and the Gibbs samplers — iterates over
+# these P pairs rather than the K×K wins matrix, so the cost scales with the
+# number of observed pairs.
+struct _AggregatedPairData
+    pairs::Vector{Tuple{Int,Int}} # (i, j) index of each aggregated pair (i < j)
+    Nvec::Vector{Int}           # trial counts per pair
+    yvec::Vector{Int}           # wins of i over j per pair
+    κ::Vector{Float64}          # y - N/2 per pair (constant)
+    P::Int
+    K::Int
+end
+
+function _aggregate_pairs(wins::Matrix{Int}, K::Int)
+    pairs = Tuple{Int,Int}[]
+    Nvec  = Int[]
+    yvec  = Int[]
+    for i in 1:K, j in (i + 1):K
+        n_ij = wins[i, j] + wins[j, i]
+        iszero(n_ij) && continue
+        push!(pairs, (i, j))
+        push!(Nvec, n_ij)
+        push!(yvec, wins[i, j])
+    end
+    κ = Float64.(yvec) .- Float64.(Nvec) ./ 2
+    return _AggregatedPairData(pairs, Nvec, yvec, κ, length(pairs), K)
+end
+
+# Xᵀκ for the P×K pair design matrix X (row p is +1 at i, −1 at j), accumulated
+# over the pairs without forming X.
+function _Xt_κ(agg::_AggregatedPairData)
+    out = zeros(agg.K)
+    @inbounds for p in 1:agg.P
+        i, j = agg.pairs[p]
+        out[i] += agg.κ[p]
+        out[j] -= agg.κ[p]
+    end
+    return out
+end
+
+# Upper-triangle (i,j) entries with i<j that are NOT a pair, in column-major
+# order so zeroing them in a K×K precision buffer is cache-friendly. The Gibbs
+# samplers use it to reset Cholesky fill-in without a full O(K²) fill! each sweep.
+function _upper_zero(agg::_AggregatedPairData)
+    K = agg.K
+    is_pair = falses(K, K)
+    @inbounds for (i, j) in agg.pairs
+        is_pair[i, j] = true
+    end
+    upper_zero = Tuple{Int,Int}[]
+    @inbounds for j in 2:K, i in 1:(j-1)
+        is_pair[i, j] || push!(upper_zero, (i, j))
+    end
+    return upper_zero
+end
+
+# Negative log-likelihood in the log-strengths θ, summed over the observed pairs:
+# a pair with y wins for i out of N contributes y·ψ − N·log(1 + eᵠ), ψ = θᵢ − θⱼ.
+function _bt_neg_loglik(θ_free::AbstractVector, agg::_AggregatedPairData)
     θ = _full_theta(θ_free)
-    λ = exp.(θ)
-    n = length(λ)
     ll = zero(eltype(θ))
-    for i in 1:n, j in 1:n
-        i == j && continue
-        w = wins[i, j]
-        iszero(w) && continue
-        ll += w * log(λ[i] / (λ[i] + λ[j]))
+    @inbounds for p in 1:agg.P
+        i, j = agg.pairs[p]
+        ψ = θ[i] - θ[j]
+        ll += agg.yvec[p] * ψ - agg.Nvec[p] * log1pexp(ψ)
     end
     return -ll
 end
 
-function _bt_neg_grad!(G::AbstractVector, θ_free::AbstractVector, wins::Matrix{Int})
+function _bt_neg_grad!(G::AbstractVector, θ_free::AbstractVector, agg::_AggregatedPairData)
     θ = _full_theta(θ_free)
-    λ = exp.(θ)
-    n = length(λ)
-    for k in 2:n
-        expected = zero(eltype(θ))
-        for j in 1:n
-            j == k && continue
-            n_kj = wins[k, j] + wins[j, k]
-            iszero(n_kj) && continue
-            expected += n_kj * λ[k] / (λ[k] + λ[j])
-        end
-        G[k - 1] = -(sum(wins[k, :]) - expected)
+    fill!(G, 0.0)
+    @inbounds for p in 1:agg.P
+        i, j = agg.pairs[p]
+        r = agg.yvec[p] - agg.Nvec[p] * _sigmoid(θ[i] - θ[j])   # observed − expected wins of i
+        i > 1 && (G[i - 1] -= r)
+        j > 1 && (G[j - 1] += r)
     end
     return G
+end
+
+# Observed information for the free log-strengths: a graph Laplacian over the
+# observed pairs with weights N·p·(1 − p), with item 1's row and column dropped.
+function _bt_neg_hessian(θ_free::AbstractVector, agg::_AggregatedPairData)
+    θ = _full_theta(θ_free)
+    H = zeros(length(θ_free), length(θ_free))
+    @inbounds for p in 1:agg.P
+        i, j = agg.pairs[p]
+        s = _sigmoid(θ[i] - θ[j])
+        _add_pair_weight!(H, i, j, agg.Nvec[p] * s * (1.0 - s))
+    end
+    return H
+end
+
+# Add the Laplacian contribution of pair (i, j) with weight `w` to the Hessian of
+# the free strengths (item 1 is pinned, so free index k − 1 holds item k).
+@inline function _add_pair_weight!(H::Matrix{Float64}, i::Int, j::Int, w::Float64)
+    @inbounds begin
+        i > 1 && (H[i - 1, i - 1] += w)
+        j > 1 && (H[j - 1, j - 1] += w)
+        if i > 1 && j > 1
+            H[i - 1, j - 1] -= w
+            H[j - 1, i - 1] -= w
+        end
+    end
+    return H
 end
 
 """
@@ -41,13 +119,13 @@ item's strength is fixed at zero during optimisation for identifiability;
 [`strengths`](@ref) returns the centred estimates.
 """
 function fit(model::BradleyTerry, method::MLE, data::PairwiseData{L}) where {L}
-    wins = data.wins
     n = length(data.labels)
     n >= 2 || throw(ArgumentError("Need at least 2 items to fit BradleyTerry, got $n"))
     _warn_degenerate_design(data)
+    agg = _aggregate_pairs(data.wins, n)
     θ₀ = zeros(n - 1)
-    f(θ_free) = _bt_neg_loglik(θ_free, wins)
-    g!(G, θ_free) = _bt_neg_grad!(G, θ_free, wins)
+    f(θ_free) = _bt_neg_loglik(θ_free, agg)
+    g!(G, θ_free) = _bt_neg_grad!(G, θ_free, agg)
     result = optimize(f, g!, θ₀, LBFGS())
     return FittedComparativeModel(
         model, 
@@ -92,45 +170,6 @@ function probability(fitted::FittedComparativeModel{BradleyTerry, MLE, R, L},
     idx_j === nothing && throw(ArgumentError("Label $(item_j) not found in fitted model"))
     return probability(fitted, idx_i, idx_j)
 end
-struct _AggregatedPairData
-    X::Matrix{Float64}          # P×K design matrix (kept for loglik / external use)
-    pairs::Vector{Tuple{Int,Int}} # (i, j) index of each aggregated pair (i < j)
-    Nvec::Vector{Int}           # trial counts per pair
-    κ::Vector{Float64}          # y - N/2 per pair (constant)
-    P::Int
-    K::Int
-    # Upper-triangle (i,j) entries with i<j that are NOT a pair, in column-major
-    # order so zeroing them in V_buf is cache-friendly. Used to reset Cholesky
-    # fill-in without a full O(K²) fill! each iteration.
-    upper_zero::Vector{Tuple{Int,Int}}
-end
-
-function _aggregate_pairs(wins::Matrix{Int}, K::Int)
-    pairs = Tuple{Int,Int}[]
-    Nvec  = Int[]
-    yvec  = Int[]
-    for i in 1:K, j in (i + 1):K
-        n_ij = wins[i, j] + wins[j, i]
-        iszero(n_ij) && continue
-        push!(pairs, (i, j))
-        push!(Nvec, n_ij)
-        push!(yvec, wins[i, j])
-    end
-    P = length(pairs)
-    X = zeros(P, K)
-    for (p, (i, j)) in enumerate(pairs)
-        X[p, i] =  1.0
-        X[p, j] = -1.0
-    end
-    κ = Float64.(yvec) .- Float64.(Nvec) ./ 2
-    pair_set = Set{Tuple{Int,Int}}(pairs)
-    upper_zero = Tuple{Int,Int}[]
-    for j in 2:K, i in 1:(j-1)   # column-major order for cache-friendly V_buf access
-        (i, j) ∉ pair_set && push!(upper_zero, (i, j))
-    end
-    return _AggregatedPairData(X, pairs, Nvec, κ, P, K, upper_zero)
-end
-
 # log p(wins | λ) using aggregated pair representation
 function _bt_loglik(λ::Vector{Float64}, agg::_AggregatedPairData)
     ll = 0.0
@@ -172,12 +211,13 @@ function fit(model::BradleyTerry, method::Bayesian, data::PairwiseData{L},
     # Pre-computation (once)
     Σ_inv       = inv(prior.Σ)
     Σ_inv_μ     = Σ_inv * prior.μ
-    Xt_κ        = agg.X' * agg.κ    # K-vector, constant
+    Xt_κ        = _Xt_κ(agg)        # K-vector, constant
     rhs_const   = Σ_inv_μ .+ Xt_κ
     # For diagonal Σ (the common default), avoid copying the full K×K matrix each
     # iteration: only zero the non-pair upper-triangle entries from Cholesky fill-in,
     # then write diagonal and pair entries directly — O(K + P) instead of O(K²).
     diag_Σ_inv  = isdiag(Σ_inv) ? diag(Σ_inv) : nothing
+    upper_zero  = diag_Σ_inv === nothing ? Tuple{Int,Int}[] : _upper_zero(agg)
 
     total = method.n_samples + method.n_burnin
     samples        = Matrix{Float64}(undef, method.n_samples, K)
@@ -203,7 +243,7 @@ function fit(model::BradleyTerry, method::Bayesian, data::PairwiseData{L},
         # we SET V_buf[i,j] = −ω instead of accumulating.
         # General prior: O(K²) copy + O(P) updates.
         if diag_Σ_inv !== nothing
-            @inbounds for (i, j) in agg.upper_zero
+            @inbounds for (i, j) in upper_zero
                 V_buf[i, j] = 0.0
             end
             @inbounds for i in 1:K

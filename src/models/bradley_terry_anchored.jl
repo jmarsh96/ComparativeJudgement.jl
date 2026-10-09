@@ -130,7 +130,8 @@ function fit(model::Anchored{BradleyTerry}, method::Bayesian,
     V₀_inv    = inv(prior.β_prior.Σ)
     V₀_inv_β₀ = V₀_inv * prior.β_prior.μ
     α₀, b₀    = prior.σ²_prior.α, prior.σ²_prior.β
-    Xt_κ      = agg.X' * agg.κ
+    Xt_κ      = _Xt_κ(agg)
+    upper_zero = _upper_zero(agg)
 
     # Anchor averaging operator M (G×K, M[g,i] = 1/n_g). The anchor layer adds
     # (b²/σ²)·MᵀWM to the λ precision and (b/σ²)·MᵀW(y−a) to its mean, with
@@ -192,7 +193,7 @@ function fit(model::Anchored{BradleyTerry}, method::Bayesian,
         # Prior is always diagonal (τ²I), so use O(K + P) assembly: zero only the
         # non-pair upper-triangle entries left by the previous Cholesky, then set
         # diagonal and pair off-diagonals directly.
-        @inbounds for (i, j) in agg.upper_zero
+        @inbounds for (i, j) in upper_zero
             V_buf[i, j] = 0.0
         end
         @inbounds for i in 1:K
