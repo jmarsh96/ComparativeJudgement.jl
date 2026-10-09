@@ -1216,4 +1216,55 @@ using LinearAlgebra: diag, dot
         @test_throws ArgumentError compare(btb, thb; criterion=:bogus)
     end
 
+    @testset "MLE over observed pairs" begin
+        CJ = ComparativeJudgement
+        # Sparse design: most pairs are never compared, some are compared repeatedly.
+        wins = [0 3 0 0 1 0;
+                1 0 2 0 0 0;
+                0 1 0 4 0 0;
+                0 0 2 0 3 0;
+                2 0 0 1 0 2;
+                1 0 0 0 1 0]
+        K = size(wins, 1)
+        agg = CJ._aggregate_pairs(wins, K)
+        @test agg.P == count(>(0), wins .+ wins') ÷ 2
+        @test sum(agg.Nvec) == sum(wins)
+        @test all(wins[i, j] == y for ((i, j), y) in zip(agg.pairs, agg.yvec))
+
+        x = [0.3, -0.4, 0.8, -0.1, 0.5]
+        h = 1e-5
+        for (negll, grad!, hess, link) in (
+                (CJ._bt_neg_loglik, CJ._bt_neg_grad!, CJ._bt_neg_hessian, d -> 1 / (1 + exp(-d))),
+                (CJ._tcv_neg_loglik, CJ._tcv_neg_grad!, CJ._tcv_neg_hessian, CJ._normcdf))
+            # The pairwise sum equals the likelihood taken over every cell of the wins matrix.
+            θ = vcat(0.0, x)
+            dense = -sum(wins[i, j] * log(link(θ[i] - θ[j])) for i in 1:K, j in 1:K if i != j)
+            @test negll(x, agg) ≈ dense
+            G = grad!(zeros(K - 1), x, agg)
+            H = hess(x, agg)
+            @test H ≈ H'
+            for k in 1:(K - 1)
+                e = zeros(K - 1); e[k] = h
+                @test G[k] ≈ (negll(x .+ e, agg) - negll(x .- e, agg)) / 2h atol=1e-5
+                # looser: the probit helpers use a 7.5e-8-accurate Φ approximation
+                @test H[:, k] ≈ (grad!(zeros(K - 1), x .+ e, agg) .- grad!(zeros(K - 1), x .- e, agg)) ./ 2h atol=1e-4
+            end
+        end
+
+        data = PairwiseData(wins, collect("abcdef"))
+        for model in (BradleyTerry(), ThurstoneCaseV())
+            f = fit(model, MLE(), data)
+            @test f.converged
+            @test all(isfinite, stderror(f))
+            @test all(stderror(f) .> 0)
+        end
+
+        # An undefeated item has no finite MLE, so standard errors are refused outright.
+        undefeated = PairwiseData([0 3 2 4; 0 0 2 1; 0 1 0 2; 0 2 1 0], collect("abcd"))
+        for model in (BradleyTerry(), ThurstoneCaseV())
+            f = @test_logs (:warn,) match_mode=:any fit(model, MLE(), undefeated)
+            @test_throws SingularInformationError stderror(f)
+        end
+    end
+
 end
