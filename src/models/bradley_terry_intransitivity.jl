@@ -75,6 +75,7 @@ and [`probability`](@ref).
 """
 function fit(model::Intransitive{BradleyTerry}, method::MLE, data::PairwiseData{L};
              σ²γ::Real=1.0) where {L}
+    _reject_ridge(method, "intransitive")
     K = length(data.labels)
     K >= 2 || throw(ArgumentError("Need at least 2 items to fit intransitive BradleyTerry, got $K"))
     σ²γ > 0 || throw(ArgumentError("σ²γ must be positive, got $σ²γ"))

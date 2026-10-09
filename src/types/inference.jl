@@ -6,11 +6,34 @@ Supertype of inference methods accepted by [`fit`](@ref).
 abstract type InferenceMethod end
 
 """
-    MLE()
+    MLE(; ridge=0.0)
 
 Maximum-likelihood estimation.
+
+`ridge` adds an optional ridge (L2) penalty `(ridge/2)·Σᵢ λᵢ²` on the centred
+latent strengths to the negative log-likelihood of a plain or anchored
+Bradley–Terry / Thurstone fit — equivalently the posterior mode under
+independent `N(0, 1/ridge)` priors on the strengths. Any `ridge > 0` gives a
+unique finite estimate even when the design does not identify the plain MLE
+(undefeated or winless items, or a win-graph that is not strongly connected; see
+[`design_connectivity`](@ref)), at the cost of shrinking the strengths towards
+zero. The default `ridge = 0` applies no penalty.
+
+For a penalised fit, [`vcov`](@ref)/[`stderror`](@ref)/[`confint`](@ref)/[`ssr`](@ref)
+use the inverse of the penalised observed information, and
+[`loglikelihood`](@ref) remains the unpenalised log-likelihood at the estimate.
 """
-struct MLE <: InferenceMethod end
+struct MLE <: InferenceMethod
+    ridge::Float64
+    function MLE(; ridge::Real=0.0)
+        (isfinite(ridge) && ridge >= 0) || throw(ArgumentError("ridge must be finite and non-negative, got $ridge"))
+        new(ridge)
+    end
+end
+
+# Models whose MLE has no ridge-penalised form reject a penalty rather than ignore it.
+_reject_ridge(method::MLE, name::AbstractString) = iszero(method.ridge) || throw(ArgumentError(
+    "a ridge penalty is not supported for the $name MLE; use MLE() without `ridge`."))
 
 """
     Bayesian(; n_samples=2000, n_burnin=500, center=true, thin=1)

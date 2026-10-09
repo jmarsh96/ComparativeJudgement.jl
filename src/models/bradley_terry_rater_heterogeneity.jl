@@ -113,6 +113,7 @@ the otherwise-unbounded joint optimum and centres λ. Query with
 """
 function fit(model::RaterHeterogeneity{BradleyTerry}, method::MLE,
              data::RaterData{L,R}; σ²λ::Real=4.0) where {L,R}
+    _reject_ridge(method, "rater-heterogeneity")
     K = length(data.labels)
     M = length(data.raters)
     K >= 2 || throw(ArgumentError("Need at least 2 items to fit rater-heterogeneity BradleyTerry, got $K"))

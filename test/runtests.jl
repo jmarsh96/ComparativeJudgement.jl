@@ -1267,4 +1267,80 @@ using LinearAlgebra: diag, dot
         end
     end
 
+    @testset "MLE ridge penalty" begin
+        CJ = ComparativeJudgement
+        @test MLE().ridge == 0.0
+        @test MLE(ridge=0.5).ridge == 0.5
+        @test_throws ArgumentError MLE(ridge=-1.0)
+        @test_throws ArgumentError MLE(ridge=Inf)
+
+        # Penalty derivatives against finite differences.
+        x = [0.3, -0.4, 0.8, -0.1, 0.5]; r = 0.7; h = 1e-5
+        H = CJ._ridge_hessian!(zeros(5, 5), r)
+        for k in 1:5
+            e = zeros(5); e[k] = h
+            g = CJ._ridge_grad!(zeros(5), x, r)
+            @test g[k] ≈ (CJ._ridge_penalty(x .+ e, r) - CJ._ridge_penalty(x .- e, r)) / 2h atol=1e-8
+            @test H[:, k] ≈ (CJ._ridge_grad!(zeros(5), x .+ e, r) .- CJ._ridge_grad!(zeros(5), x .- e, r)) ./ 2h atol=1e-8
+        end
+        @test CJ._ridge_penalty(x, 0.0) == 0.0
+        @test CJ._ridge_grad!(ones(5), x, 0.0) == ones(5)
+
+        wins = [0 3 0 0 1 0;
+                1 0 2 0 0 0;
+                0 1 0 4 0 0;
+                0 0 2 0 3 0;
+                2 0 0 1 0 2;
+                1 0 0 0 1 0]
+        data = PairwiseData(wins, collect("abcdef"))
+        K = 6
+        for (model, link) in ((BradleyTerry(), d -> 1 / (1 + exp(-d))), (ThurstoneCaseV(), CJ._normcdf))
+            plain = fit(model, MLE(), data)
+            @test strengths(fit(model, MLE(ridge=0.0), data)) == strengths(plain)
+
+            # A larger penalty shrinks the strengths further towards zero.
+            spread = [sum(abs2, strengths(fit(model, MLE(ridge=r), data))) for r in (0.0, 0.1, 1.0, 10.0)]
+            @test issorted(spread; rev=true)
+            @test spread[end] < spread[1] / 2
+
+            # The estimate maximises loglik − (r/2)·Σλᵢ² with every item free.
+            f = fit(model, MLE(ridge=0.5), data)
+            λ̂ = strengths(f)
+            @test f.converged
+            @test sum(λ̂) ≈ 0 atol=1e-8
+            objective(λ) = -sum(wins[i, j] * log(link(λ[i] - λ[j])) for i in 1:K, j in 1:K if i != j) + 0.25 * sum(abs2, λ)
+            for k in 1:K
+                e = zeros(K); e[k] = 1e-3
+                @test objective(λ̂) < objective(λ̂ .+ e)
+                @test objective(λ̂) < objective(λ̂ .- e)
+            end
+            @test loglikelihood(f) < loglikelihood(plain)
+            @test all(0 .< stderror(f) .< stderror(plain))
+        end
+
+        # An undefeated item: the plain MLE diverges, the penalised one is finite and quiet.
+        undefeated = PairwiseData([0 3 2 4; 0 0 2 1; 0 1 0 2; 0 2 1 0], collect("abcd"))
+        for model in (BradleyTerry(), ThurstoneCaseV())
+            f = @test_logs fit(model, MLE(ridge=0.1), undefeated)
+            @test f.converged
+            @test all(isfinite, strengths(f))
+            @test argmax(strengths(f)) == 1
+            @test all(isfinite, stderror(f))
+            @test isfinite(ssr(f))
+        end
+
+        # The anchored MLE passes the penalty to its first-stage fit.
+        ad = AnchoredData(undefeated, ['a', 'b', 'c'], [9.0, 5.0, 4.0])
+        fa = @test_logs fit(BradleyTerryAnchored(), MLE(ridge=0.1), ad)
+        @test strengths(fa) ≈ strengths(fit(BradleyTerry(), MLE(ridge=0.1), undefeated))
+
+        # Models with no penalised form refuse the option instead of ignoring it.
+        cd = CovariateData(data, reshape(Float64[1, 2, 3, 4, 5, 7], 6, 1), [:x])
+        @test_throws ArgumentError fit(BradleyTerryCovariates(), MLE(ridge=0.1), cd)
+        @test_throws ArgumentError fit(ThurstoneCaseVCovariates(), MLE(ridge=0.1), cd)
+        @test_throws ArgumentError fit(BradleyTerryIntransitive(), MLE(ridge=0.1), data)
+        rd = RaterData(["A", "C", "B"], ["B", "A", "C"], ["r1", "r1", "r2"])
+        @test_throws ArgumentError fit(BradleyTerryRaterHeterogeneity(), MLE(ridge=0.1), rd)
+    end
+
 end
